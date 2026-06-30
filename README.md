@@ -1,4 +1,4 @@
-# GozarNet (GNET)
+# GNet (GozarNET)
 
 A lightweight Android VPN client built on [Xray-core](https://github.com/XTLS/Xray-core) for bypassing internet restrictions, with a clean Jetpack Compose UI in English and Persian.
 
