@@ -1,0 +1,48 @@
+{
+  "log": { "loglevel": "warning" },
+  "inbounds": [
+    {
+      "tag": "tun-in",
+      "port": 0,
+      "protocol": "tun",
+      "settings": {
+        "name": "xray0",
+        "MTU": 1500
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "tag": "proxy",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "tr.zarink.ir",
+            "port": 12999,
+            "users": [
+              { "id": "21ac2e51-a1d8-465d-9eec-edbf1d728c92", "encryption": "none" }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "serverName": "soft98.ir",
+          "publicKey": "5LR0aQ5YjVhUdgnhaouA4-EffKWP4NFuWYB1b2nfnEI",
+          "shortId": "f39a5fd81bebfc70",
+          "fingerprint": "chrome",
+          "spiderX": "/"
+        }
+      }
+    },
+    { "tag": "direct", "protocol": "freedom" }
+  ],
+  "routing": {
+    "rules": [
+      { "type": "field", "inboundTag": ["tun-in"], "outboundTag": "proxy" }
+    ]
+  }
+}

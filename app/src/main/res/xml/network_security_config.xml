@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  GozarNet fetches user-supplied subscription / config endpoints, and in the regions
+  this app targets many of those are plain HTTP. Android 9+ (API 28+) blocks cleartext
+  by default, which is why the bundled default subscription failed on some phones with:
+      "Cleartext HTTP traffic to <host> not permitted"
+  Permitting cleartext app-wide lets any http(s) sub URL work. System CAs are still
+  trusted for the normal TLS connections (speed test, https subscriptions, etc.).
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

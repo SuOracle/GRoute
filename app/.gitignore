@@ -1,0 +1,31 @@
+# ---- Secrets / infrastructure (NEVER commit) ----
+secrets.properties
+keystore.properties
+signing.properties
+*.jks
+*.keystore
+*.p12
+*.pem
+google-services.json
+
+# ---- Android / Gradle ----
+*.iml
+.gradle/
+local.properties
+.idea/
+build/
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+release/
+proguard/
+
+# ---- Misc ----
+*.log
+.DS_Store
+.kotlin/
