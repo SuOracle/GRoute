@@ -362,7 +362,7 @@ private fun WelcomeScreen(onDone: () -> Unit) {
             Text(
                 text = t("welcome_tagline"),
                 style = MaterialTheme.typography.titleMedium,
-                fontSize = 18.sp,
+                fontSize = 16.sp,
                 fontWeight = FontWeight.Bold,
                 fontFamily = welcomeFont,
                 color = Color(0xFFEDEFF3),
