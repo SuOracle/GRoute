@@ -54,7 +54,14 @@ func Start(configJSON string, fd int) error {
 	mu.Lock()
 	defer mu.Unlock()
 	if instance != nil {
-		return nil
+		instance.Close()
+		instance = nil
+	}
+	if tunFd >= 0 {
+		if f := os.NewFile(uintptr(tunFd), "tun"); f != nil {
+			f.Close()
+		}
+		tunFd = -1
 	}
 	tunFd = fd
 	os.Setenv("XRAY_TUN_FD", strconv.Itoa(fd))
@@ -67,6 +74,7 @@ func Start(configJSON string, fd int) error {
 		return err
 	}
 	if err := inst.Start(); err != nil {
+		inst.Close()
 		return err
 	}
 	instance = inst

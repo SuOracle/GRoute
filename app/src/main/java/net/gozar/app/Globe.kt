@@ -83,7 +83,7 @@ object LocationFetcher {
     suspend fun fetch(throughProxy: Boolean): IpLocation? = withContext(Dispatchers.IO) {
         try {
             val proxy = if (throughProxy)
-                java.net.Proxy(java.net.Proxy.Type.SOCKS, java.net.InetSocketAddress("127.0.0.1", 10808))
+                java.net.Proxy(java.net.Proxy.Type.SOCKS, java.net.InetSocketAddress("127.0.0.1", 10626))
             else java.net.Proxy.NO_PROXY
             val ip = fetchPlainIp(proxy, "https://api4.ipify.org")
                 ?: fetchPlainIp(proxy, "https://api6.ipify.org")

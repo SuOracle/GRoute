@@ -10,7 +10,7 @@ import java.net.URL
 object SpeedTest {
 
     private const val PROXY_HOST = "127.0.0.1"
-    private const val PROXY_PORT = 10808
+    private const val PROXY_PORT = 10626
     private const val DELAY_URL = "https://www.gstatic.com/generate_204"
     private const val DOWNLOAD_URL = "https://speed.cloudflare.com/__down?bytes=26214400" // 25 MB per request // 25 MB per request // 10 MB
 

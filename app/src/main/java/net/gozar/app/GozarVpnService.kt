@@ -83,6 +83,7 @@ class GozarVpnService : VpnService() {
 
             try {
                 setupGeoAssets()
+                runCatching { Gozarcore.stop() }
                 Gozarcore.start(configJson, pfd.detachFd().toLong())
                 Log.i(TAG, "Xray core started, tunnel up")
                 VpnBridge.sendConnected(applicationContext)
@@ -164,6 +165,7 @@ class GozarVpnService : VpnService() {
         tearingDown = true
         pollJob?.cancel()
         pollJob = null
+        runCatching { Gozarcore.stop() }
         if (error != null) VpnBridge.sendError(applicationContext, error)
         else VpnBridge.sendDisconnected(applicationContext)
         runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }

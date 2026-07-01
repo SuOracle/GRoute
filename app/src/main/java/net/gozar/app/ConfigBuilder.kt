@@ -33,7 +33,7 @@ object ConfigBuilder {
         }
 
         val socksIn = JSONObject().put("tag", "socks-in")
-            .put("port", 10808).put("listen", "127.0.0.1").put("protocol", "socks")
+            .put("port", 10626).put("listen", "127.0.0.1").put("protocol", "socks")
             .put("settings", JSONObject().put("udp", true))
 
         root.put("inbounds", JSONArray().put(tunIn).put(socksIn))
