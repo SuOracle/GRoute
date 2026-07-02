@@ -42,6 +42,9 @@ import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.foundation.background
@@ -422,6 +425,7 @@ class MainActivity : ComponentActivity() {
         store = ConfigStore(applicationContext)
         UsageStore.init(applicationContext)
         VpnBridge.register(applicationContext)
+        runCatching { startService(Intent(this, GozarVpnService::class.java).setAction(GozarVpnService.ACTION_WARM)) }
         lifecycleScope.launch {
             VpnState.state.collect { s ->
                 if (s == Connection.DISCONNECTED) {
@@ -657,18 +661,15 @@ private fun GozarApp(
             CenterAlignedTopAppBar(
                 title = {
                     if (screenKey == "connection") {
+                        val logoRes = if (effectiveDark) R.drawable.logo else R.drawable.logo_black
                         Box {
                             Image(
-                                painter = painterResource(R.drawable.logo),
+                                painter = painterResource(logoRes),
                                 contentDescription = null,
-                                modifier = Modifier
-                                    .height(34.dp)
-                                    .offset(x = 1.dp, y = 2.dp)
-                                    .blur(3.dp),
-                                colorFilter = ColorFilter.tint(Color.Black.copy(alpha = 0.45f))
+                                modifier = Modifier.height(34.dp)
                             )
                             Image(
-                                painter = painterResource(R.drawable.logo),
+                                painter = painterResource(logoRes),
                                 contentDescription = t("app_title"),
                                 modifier = Modifier.height(34.dp)
                             )
@@ -983,10 +984,10 @@ private fun ConnectionScreen(
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Filled.ArrowDownward, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Text("${formatBytes(downSpeed, lang)}${t("unit_per_sec")}", style = MaterialTheme.typography.titleMedium)
+                        SpeedText(downSpeed)
                         Spacer(Modifier.width(14.dp))
                         Icon(Icons.Filled.ArrowUpward, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Text("${formatBytes(upSpeed, lang)}${t("unit_per_sec")}", style = MaterialTheme.typography.titleMedium)
+                        SpeedText(upSpeed)
                     }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Filled.ArrowDownward, contentDescription = null,
@@ -1010,7 +1011,7 @@ private fun ConnectionScreen(
                         }
                     },
                     enabled = !delayRunning,
-                    modifier = Modifier.width(88.dp),
+                    modifier = Modifier.defaultMinSize(minWidth = 88.dp),
                     minHeight = 38.dp,
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
                 ) {
@@ -1886,14 +1887,14 @@ private fun AboutScreen(modifier: Modifier = Modifier) {
     var updateStatus by remember { mutableStateOf<String?>(null) }
     var updateUrl by remember { mutableStateOf<String?>(null) }
     val scope = rememberCoroutineScope()
-
+    val logoRes = if (MaterialTheme.colorScheme.background.luminance() < 0.5f) R.drawable.logo else R.drawable.logo_black
     Column(
         modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Image(
-            painter = painterResource(R.drawable.logo),
+            painter = painterResource(logoRes),
             contentDescription = null,
             modifier = Modifier.padding(top = 8.dp).size(128.dp)
         )
@@ -1912,7 +1913,7 @@ private fun AboutScreen(modifier: Modifier = Modifier) {
         Card(
             modifier = Modifier.fillMaxWidth()
                 .clip(RoundedCornerShape(20.dp))
-                .clickable { runCatching { uriHandler.openUri("https://github.com/SuOracle/GNet") } },
+                .clickable { runCatching { uriHandler.openUri("https://github.com/SuOracle/GRoute") } },
             shape = RoundedCornerShape(20.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
         ) {
@@ -1920,7 +1921,7 @@ private fun AboutScreen(modifier: Modifier = Modifier) {
                 Column(Modifier.weight(1f)) {
                     Text(t("source_code"), style = MaterialTheme.typography.bodyLarge)
                     Text(
-                        "github.com/SuOracle/GNet",
+                        "github.com/SuOracle/GRoute",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.primary
                     )
@@ -2041,15 +2042,15 @@ private fun xrayCoreVersion(): String = runCatching {
 }.getOrNull()?.takeIf { it.isNotBlank() } ?: "—"
 
 private val PRIVACY_EN = """
-GozarNet (GNET) is built to protect your privacy.
+GRoute is built to protect your privacy.
 
-What we collect: Nothing. GozarNet has no accounts, no analytics, no advertising and no tracking. The developer runs no servers that receive your browsing activity.
+What we collect: Nothing. GRoute has no accounts, no analytics, no advertising and no tracking. The developer runs no servers that receive your browsing activity.
 
 On your device: Your server configurations are stored encrypted in the app's private storage. Data-usage statistics (how much traffic passed through the tunnel) stay only on your device and are never transmitted anywhere. Clearing the app's data removes them.
 
 Network requests: To show your current IP address and approximate location, the app contacts third-party services such as ipwho.is and ipify.org. These services necessarily see the IP address of your connection. No other identifying information is sent.
 
-Your servers: The proxy/VPN servers you add are provided by you or your subscription provider. GozarNet has no control over, and no visibility into, those servers' logging practices — choose providers you trust.
+Your servers: The proxy/VPN servers you add are provided by you or your subscription provider. GRoute has no control over, and no visibility into, those servers' logging practices — choose providers you trust.
 
 Permissions: The VPN permission is used solely to route traffic through the tunnel you select. It is never used to inspect, modify or record your traffic.
 
@@ -2059,15 +2060,15 @@ Contact: Questions? Reach the developer on Telegram at @OracleVPNsupport.
 """.trimIndent()
 
 private val PRIVACY_FA = """
-گذرنت (GNET) برای حفاظت از حریم خصوصی شما ساخته شده است.
+جی‌روت برای حفاظت از حریم خصوصی شما ساخته شده است.
 
-چه چیزی جمع‌آوری می‌کنیم: هیچ‌چیز. گذرنت حساب کاربری، تحلیل آماری، تبلیغات و ردیابی ندارد. توسعه‌دهنده هیچ سروری که فعالیت مرور شما را دریافت کند اجرا نمی‌کند.
+چه چیزی جمع‌آوری می‌کنیم: هیچ‌چیز. جی‌روت حساب کاربری، تحلیل آماری، تبلیغات و ردیابی ندارد. توسعه‌دهنده هیچ سروری که فعالیت مرور شما را دریافت کند اجرا نمی‌کند.
 
 روی دستگاه شما: کانفیگ‌های سرور شما به‌صورت رمزگذاری‌شده در حافظهٔ خصوصی برنامه ذخیره می‌شوند. آمار مصرف داده (میزان ترافیک عبوری از تونل) فقط روی دستگاه شما می‌ماند و به هیچ‌جا ارسال نمی‌شود. پاک‌کردن دادهٔ برنامه آن را حذف می‌کند.
 
 درخواست‌های شبکه: برای نمایش نشانی IP و موقعیت تقریبی شما، برنامه با سرویس‌های شخص ثالث مانند ipwho.is و ipify.org تماس می‌گیرد. این سرویس‌ها ناگزیر نشانی IP اتصال شما را می‌بینند. هیچ اطلاعات شناسایی دیگری ارسال نمی‌شود.
 
-سرورهای شما: سرورهای پراکسی/وی‌پی‌ان که اضافه می‌کنید توسط شما یا ارائه‌دهندهٔ اشتراکتان فراهم می‌شوند. گذرنت هیچ کنترل یا دیدی نسبت به سیاست ثبت لاگ آن سرورها ندارد؛ ارائه‌دهنده‌ای را انتخاب کنید که به آن اعتماد دارید.
+سرورهای شما: سرورهای پراکسی/وی‌پی‌ان که اضافه می‌کنید توسط شما یا ارائه‌دهندهٔ اشتراکتان فراهم می‌شوند. جی‌روت هیچ کنترل یا دیدی نسبت به سیاست ثبت لاگ آن سرورها ندارد؛ ارائه‌دهنده‌ای را انتخاب کنید که به آن اعتماد دارید.
 
 دسترسی‌ها: دسترسی وی‌پی‌ان تنها برای هدایت ترافیک از طریق تونلی که انتخاب می‌کنید استفاده می‌شود و هرگز برای بازرسی، تغییر یا ثبت ترافیک شما به‌کار نمی‌رود.
 
@@ -3221,6 +3222,35 @@ private fun formatBytes(bytes: Long, lang: Lang): String {
         else -> { num = "%.2f".format(bytes / (1024.0 * 1024 * 1024)); unit = Strings.get(lang, "unit_gb") }
     }
     return "\u202A${localizeDigits(num, lang)}\u202C $unit"
+}
+
+@Composable
+private fun SpeedText(bytes: Long) {
+    val t = stringsFn()
+    val lang = LocalLang.current
+    val parts = formatBytesParts(bytes, lang)
+    Text(
+        buildAnnotatedString {
+            append("\u202A${parts.first}\u202C ")
+            withStyle(SpanStyle(fontSize = 12.sp)) {
+                append(parts.second + t("unit_per_sec"))
+            }
+        },
+        style = MaterialTheme.typography.titleMedium,
+        maxLines = 1
+    )
+}
+
+private fun formatBytesParts(bytes: Long, lang: Lang): Pair<String, String> {
+    val unit: String
+    val num: String
+    when {
+        bytes < 1024 -> { num = "$bytes"; unit = Strings.get(lang, "unit_b") }
+        bytes < 1024 * 1024 -> { num = "%.1f".format(bytes / 1024.0); unit = Strings.get(lang, "unit_kb") }
+        bytes < 1024L * 1024 * 1024 -> { num = "%.1f".format(bytes / (1024.0 * 1024)); unit = Strings.get(lang, "unit_mb") }
+        else -> { num = "%.2f".format(bytes / (1024.0 * 1024 * 1024)); unit = Strings.get(lang, "unit_gb") }
+    }
+    return localizeDigits(num, lang) to unit
 }
 
 @Composable

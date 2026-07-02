@@ -43,6 +43,10 @@ class GozarVpnService : VpnService() {
                 return START_NOT_STICKY
             }
             ACTION_WARM -> {
+                if (tunFd != null) {
+                    VpnBridge.sendConnected(applicationContext)
+                    return START_STICKY
+                }
                 return START_NOT_STICKY
             }
             else -> {
