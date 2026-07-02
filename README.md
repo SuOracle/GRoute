@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="GRouteTransparentBlack.png" width="220" alt="GRoute">
+</p>
+
 # GRoute (جی‌روت)
 
 A lightweight Android VPN client built on [Xray-core](https://github.com/XTLS/Xray-core) for bypassing internet restrictions, with a clean Jetpack Compose UI in English and Persian.
@@ -5,6 +9,10 @@ A lightweight Android VPN client built on [Xray-core](https://github.com/XTLS/Xr
 *GRoute — a tool to pass through restrictions.*
 
 ## Features
+
+<p align="center">
+  <img src="Artboard%203.png" width="720" alt="GRoute features">
+</p>
 
 - **Multiple protocols** — VLESS, VMess, Trojan, and Shadowsocks.
 - **Modern transports** — REALITY, TLS, WebSocket, gRPC, HTTPUpgrade, XHTTP, and plain TCP.
