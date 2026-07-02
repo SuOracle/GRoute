@@ -1,11 +1,14 @@
-# GNet (GozarNet)
+# GRoute (جی‌روت)
 
 A lightweight Android VPN client built on [Xray-core](https://github.com/XTLS/Xray-core) for bypassing internet restrictions, with a clean Jetpack Compose UI in English and Persian.
+
+*GRoute — a tool to pass through restrictions.*
 
 ## Features
 
 - **Multiple protocols** — VLESS, VMess, Trojan, and Shadowsocks.
-- **Modern transports** — REALITY, TLS, WebSocket, and plain TCP.
+- **Modern transports** — REALITY, TLS, WebSocket, gRPC, HTTPUpgrade, XHTTP, and plain TCP.
+- **Cloudflare WARP** — register and add a WARP configuration in one tap.
 - **Subscriptions** — add a subscription link to import all of its servers at once, with configurable auto-refresh (off, hourly, or every few hours) and remaining-data / expiry display.
 - **Per-app proxy** — route only selected apps through the VPN, or route everything except selected apps.
 - **Split routing** — Iranian sites connect directly, outside the tunnel.
@@ -14,12 +17,18 @@ A lightweight Android VPN client built on [Xray-core](https://github.com/XTLS/Xr
 - **Cloudflare clean-IP scanner** — samples Cloudflare's IP ranges, keeps the ones reachable from your network ranked by latency, and lets you copy one to use as a clean IP for Cloudflare-fronted servers.
 - **Internet quality test** — measures speed, ping, jitter, and idle / download / upload latency, then rates your connection for gaming, web browsing, streaming, and video calling — through the tunnel or on your direct connection.
 - **Per-server testing** — per-server ping with a one-tap *Test all*, plus a real-delay test while connected.
-- **Share & import** — copy or share any server or subscription as a link.
+- **Share & import** — copy or share any server or subscription as a link, and multi-select servers to copy, share, or delete in bulk.
 - **Xray logs** — view the engine's runtime logs inside the app.
 - **Data-usage history** — live session speed and total, plus hourly, daily, and custom date ranges.
 - **About** — shows the bundled Xray-core version, developer, and privacy policy.
 - **Bilingual** — full English and Persian UI with right-to-left support.
 - **Themes** — light, dark, and pure-black AMOLED.
+
+## Download
+
+Grab the latest APK from the [Releases](https://github.com/SuOracle/GNet/releases) page and install it on your device. Because GRoute is distributed outside the Play Store, you'll need to allow installation from your browser or file manager the first time. Google Play Protect may show a caution prompt on sideloaded apps; this is normal for direct APK installs and fades as install volume grows on a stable signing key.
+
+To update later, install the newer APK over the existing one — as long as it's signed with the same key, your servers and settings are preserved. GRoute can also check for new releases from the **About** screen.
 
 ## How to use
 
@@ -27,7 +36,7 @@ A lightweight Android VPN client built on [Xray-core](https://github.com/XTLS/Xr
 
 - Paste one or more config links (`vless://`, `vmess://`, `trojan://`, `ss://`) — one per line — and tap **Add**.
 - Paste a **subscription link** (starting with `http`/`https`) to import every server it contains.
-- Use the **+** menu to paste from the clipboard or add a server manually, field by field.
+- Use the **+** menu to paste from the clipboard, add a server manually field by field, or register a **WARP** configuration.
 
 **2. Pick a server.** Tap any server to select it. Tap **Test all** to ping every server, then choose **Fastest first** from the sort menu to move the quickest to the top. The share icon on any server or subscription lets you copy or share it as a link.
 
@@ -57,6 +66,14 @@ A lightweight Android VPN client built on [Xray-core](https://github.com/XTLS/Xr
 ## Tech stack
 
 Kotlin · Jetpack Compose · Material 3 · Xray-core (via a gomobile bridge) · minSdk 26 · targetSdk 36.
+
+## Privacy
+
+GRoute has no accounts, analytics, advertising, or tracking. Server configurations and usage statistics stay on your device and are never transmitted. See the full policy in the **About** screen.
+
+## Support
+
+Questions or issues? Reach the developer on Telegram at [@OracleVPNsupport](https://t.me/OracleVPNsupport).
 
 ## License
 
