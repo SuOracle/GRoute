@@ -25,10 +25,20 @@ android {
         targetSdk = 36
         versionCode = 2
         versionName = "1.0.1"
-
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-
         buildConfigField("String", "DEFAULT_SUB_URL", "\"${secrets.getProperty("DEFAULT_SUB_URL", "")}\"")
+    }
+
+    signingConfigs {
+        create("release") {
+            val kf = System.getenv("KEYSTORE_FILE")
+            if (kf != null) {
+                storeFile = file(kf)
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("KEY_ALIAS")
+                keyPassword = System.getenv("KEY_PASSWORD")
+            }
+        }
     }
 
     compileOptions {
@@ -43,6 +53,9 @@ android {
 
     buildTypes {
         release {
+            if (System.getenv("KEYSTORE_FILE") != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(
