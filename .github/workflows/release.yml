@@ -41,6 +41,10 @@ jobs:
           echo "DONATION_CARD_NUMBER=${{ secrets.DONATION_CARD_NUMBER }}" >> local.properties
           echo "DONATION_CARD_HOLDER=${{ secrets.DONATION_CARD_HOLDER }}" >> local.properties
 
+      - name: Create secrets.properties
+        run: |
+          echo "DEFAULT_SUB_URL=${{ secrets.DEFAULT_SUB_URL }}" >> secrets.properties
+
       - name: Decode keystore
         run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/release.jks"
 
@@ -62,6 +66,13 @@ jobs:
           path: app/build/outputs/apk/release/*.apk
           if-no-files-found: error
 
+      - name: Upload mapping file
+        uses: actions/upload-artifact@v4
+        with:
+          name: mapping
+          path: app/build/outputs/mapping/release/mapping.txt
+          if-no-files-found: warn
+
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
@@ -73,4 +84,4 @@ jobs:
 
       - name: Clean up secrets from runner
         if: always()
-        run: rm -f "$RUNNER_TEMP/release.jks" local.properties
+        run: rm -f "$RUNNER_TEMP/release.jks" local.properties secrets.properties
