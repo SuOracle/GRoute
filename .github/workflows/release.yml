@@ -6,9 +6,14 @@ on:
       - 'v*'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      GRADLE_OPTS: "-Dorg.gradle.daemon=false -Dhttp.proxyHost= -Dhttps.proxyHost="
 
     steps:
       - name: Checkout
@@ -22,6 +27,14 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v3
+
+      - name: Strip any proxy settings from gradle.properties
+        run: |
+          for f in gradle.properties gradle/gradle.properties gradle/gradle-daemon-jvm.properties; do
+            if [ -f "$f" ]; then
+              sed -i '/proxyHost/d; /proxyPort/d' "$f"
+            fi
+          done
 
       - name: Create local.properties
         run: |
@@ -47,6 +60,15 @@ jobs:
           name: GRoute-release
           path: app/build/outputs/apk/release/*.apk
           if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: app/build/outputs/apk/release/*.apk
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Clean up secrets from runner
         if: always()
