@@ -36,6 +36,7 @@ object ConfigShare {
         if (c.serviceName.isNotEmpty()) params.add("serviceName" to c.serviceName)
         if (c.mode.isNotEmpty()) params.add("mode" to c.mode)
         if (c.alpn.isNotEmpty()) params.add("alpn" to c.alpn)
+        if (c.headerType.isNotEmpty()) params.add("headerType" to c.headerType)
         val query = params.joinToString("&") { "${it.first}=${enc(it.second)}" }
         return "$scheme://${enc(userInfo)}@${c.address}:${c.port}?$query#${enc(c.name)}"
     }
@@ -50,7 +51,7 @@ object ConfigShare {
         o.put("aid", c.alterId.toString())
         o.put("scy", c.encryption.ifEmpty { "auto" })
         o.put("net", c.network)
-        o.put("type", "none")
+        o.put("type", c.headerType.ifEmpty { "none" })
         o.put("host", c.host)
         o.put("path", c.path)
         o.put("tls", if (c.security == "tls") "tls" else "")

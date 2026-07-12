@@ -27,6 +27,7 @@ data class ProxyConfig(
     val serviceName: String = "",
     val mode: String = "",
     val alpn: String = "",
+    val headerType: String = "",
     val subId: String = "",
     val privateKey: String = "",
     val localAddress: String = "",
@@ -44,6 +45,7 @@ data class ProxyConfig(
         .put("shortId", shortId).put("fingerprint", fingerprint)
         .put("path", path).put("host", host)
         .put("serviceName", serviceName).put("mode", mode).put("alpn", alpn).put("source", source.name)
+        .put("headerType", headerType)
         .put("subId", subId)
         .put("privateKey", privateKey).put("localAddress", localAddress)
         .put("mtu", mtu).put("reserved", reserved)
@@ -71,6 +73,7 @@ data class ProxyConfig(
             serviceName = o.optString("serviceName", ""),
             mode = o.optString("mode", ""),
             alpn = o.optString("alpn", ""),
+            headerType = o.optString("headerType", ""),
             subId = o.optString("subId", ""),
             privateKey = o.optString("privateKey", ""),
             localAddress = o.optString("localAddress", ""),

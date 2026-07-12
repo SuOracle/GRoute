@@ -8,7 +8,7 @@ import org.json.JSONArray
 
 enum class PerAppMode { OFF, ALLOWLIST, BLOCKLIST }
 enum class ThemeMode { SYSTEM, LIGHT, DARK, AMOLED }
-class ConfigStore(context: Context) {
+class ConfigStore private constructor(context: Context) {
 
     private val prefs = context.getSharedPreferences("gozarnet", Context.MODE_PRIVATE)
 
@@ -20,6 +20,27 @@ class ConfigStore(context: Context) {
 
     private val _fragment = MutableStateFlow(prefs.getBoolean(KEY_FRAGMENT, false))
     val fragment: StateFlow<Boolean> = _fragment.asStateFlow()
+
+    private val _fragmentPackets = MutableStateFlow(prefs.getString(KEY_FRAG_PACKETS, "tlshello") ?: "tlshello")
+    val fragmentPackets: StateFlow<String> = _fragmentPackets.asStateFlow()
+    fun setFragmentPackets(v: String) {
+        _fragmentPackets.value = v
+        prefs.edit().putString(KEY_FRAG_PACKETS, v).apply()
+    }
+
+    private val _fragmentLength = MutableStateFlow(prefs.getString(KEY_FRAG_LENGTH, "10-20") ?: "10-20")
+    val fragmentLength: StateFlow<String> = _fragmentLength.asStateFlow()
+    fun setFragmentLength(v: String) {
+        _fragmentLength.value = v
+        prefs.edit().putString(KEY_FRAG_LENGTH, v).apply()
+    }
+
+    private val _fragmentInterval = MutableStateFlow(prefs.getString(KEY_FRAG_INTERVAL, "10-20") ?: "10-20")
+    val fragmentInterval: StateFlow<String> = _fragmentInterval.asStateFlow()
+    fun setFragmentInterval(v: String) {
+        _fragmentInterval.value = v
+        prefs.edit().putString(KEY_FRAG_INTERVAL, v).apply()
+    }
 
     private val _splitRouting = MutableStateFlow(prefs.getBoolean(KEY_SPLIT, false))
     val splitRouting: StateFlow<Boolean> = _splitRouting.asStateFlow()
@@ -42,6 +63,22 @@ class ConfigStore(context: Context) {
         if (!cur.add(type)) cur.remove(type)
         _sniffTypes.value = cur
         prefs.edit().putStringSet(KEY_SNIFF_TYPES, cur).apply()
+    }
+
+    private val _sortBySpeed = MutableStateFlow(prefs.getBoolean(KEY_SORT_SPEED, false))
+    val sortBySpeed: StateFlow<Boolean> = _sortBySpeed.asStateFlow()
+
+    fun setSortBySpeed(enabled: Boolean) {
+        _sortBySpeed.value = enabled
+        prefs.edit().putBoolean(KEY_SORT_SPEED, enabled).apply()
+    }
+
+    private val _autoSelect = MutableStateFlow(prefs.getBoolean(KEY_AUTOSELECT, false))
+    val autoSelect: StateFlow<Boolean> = _autoSelect.asStateFlow()
+
+    fun setAutoSelect(enabled: Boolean) {
+        _autoSelect.value = enabled
+        prefs.edit().putBoolean(KEY_AUTOSELECT, enabled).apply()
     }
 
     private val _autoRefreshHours = MutableStateFlow(prefs.getInt(KEY_AUTOREFRESH, DEFAULT_AUTOREFRESH))
@@ -272,13 +309,25 @@ class ConfigStore(context: Context) {
 
     fun lastTestTime(): Long = prefs.getLong(KEY_LAST_TEST_TIME, 0L)
 
-    private companion object {
-        const val KEY_CONFIGS = "configs"
-        const val KEY_SUBS = "subscriptions"
-        const val KEY_FRAGMENT = "fragment_enabled"
-        const val KEY_SPLIT = "split_routing_enabled"
+    companion object {
+        @Volatile private var instance: ConfigStore? = null
+
+        fun get(context: Context): ConfigStore =
+            instance ?: synchronized(this) {
+                instance ?: ConfigStore(context.applicationContext).also { instance = it }
+            }
+
+        private const val KEY_CONFIGS = "configs"
+        private const val KEY_SUBS = "subscriptions"
+        private const val KEY_FRAGMENT = "fragment_enabled"
+        private const val KEY_FRAG_PACKETS = "fragment_packets"
+        private const val KEY_FRAG_LENGTH = "fragment_length"
+        private const val KEY_FRAG_INTERVAL = "fragment_interval"
+        private const val KEY_SPLIT = "split_routing_enabled"
         private const val KEY_SNIFFING = "sniffing_enabled"
         private const val KEY_SNIFF_TYPES = "sniffing_types"
+        private const val KEY_AUTOSELECT = "auto_select_fastest"
+        private const val KEY_SORT_SPEED = "sort_by_speed"
         private const val KEY_THEME = "theme_mode"
         private const val KEY_DEFAULT_SEEDED = "default_sub_seeded"
         private const val DEFAULT_SUB_ID = "default-sub"
@@ -286,8 +335,8 @@ class ConfigStore(context: Context) {
         private val DEFAULT_SUB_URL = BuildConfig.DEFAULT_SUB_URL
         private const val KEY_AUTOREFRESH = "auto_refresh_hours"
         private const val DEFAULT_AUTOREFRESH = 1
-        const val KEY_LANG = "app_lang"
-        const val KEY_SELECTED = "selected_config_id"
+        private const val KEY_LANG = "app_lang"
+        private const val KEY_SELECTED = "selected_config_id"
         private const val KEY_PERAPP_MODE = "perapp_mode"
         private const val KEY_PERAPP_LIST = "perapp_list"
         private const val KEY_EXPANDED_SUBS = "expanded_subs"

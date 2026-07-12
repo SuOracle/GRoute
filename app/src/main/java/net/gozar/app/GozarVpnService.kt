@@ -115,7 +115,7 @@ class GozarVpnService : VpnService() {
     }
 
     private fun applyPerApp(builder: Builder) {
-        val store = ConfigStore(applicationContext)
+        val store = ConfigStore.get(applicationContext)
         val mode = store.perAppMode.value
         val list = store.perAppList.value
 

@@ -10,7 +10,10 @@ object ConfigBuilder {
         fragment: Boolean = false,
         splitRouting: Boolean = false,
         sniffing: Boolean = false,
-        sniffTypes: Set<String> = setOf("http", "tls", "quic")
+        sniffTypes: Set<String> = setOf("http", "tls", "quic"),
+        fragmentPackets: String = "tlshello",
+        fragmentLength: String = "10-20",
+        fragmentInterval: String = "10-20"
     ): String {
         val root = JSONObject()
         root.put("log", JSONObject().put("loglevel", "warning"))
@@ -40,8 +43,8 @@ object ConfigBuilder {
 
         val proxyOut = buildOutbound(config)
         if (fragment) {
-            proxyOut.getJSONObject("streamSettings")
-                .put("sockopt", JSONObject().put("dialerProxy", "fragment"))
+            proxyOut.optJSONObject("streamSettings")
+                ?.put("sockopt", JSONObject().put("dialerProxy", "fragment"))
         }
 
         val outbounds = JSONArray().put(proxyOut)
@@ -50,9 +53,9 @@ object ConfigBuilder {
                 .put("tag", "fragment")
                 .put("protocol", "freedom")
                 .put("settings", JSONObject().put("fragment", JSONObject()
-                    .put("packets", "tlshello")
-                    .put("length", "100-200")
-                    .put("interval", "10-20"))))
+                    .put("packets", fragmentPackets.ifBlank { "tlshello" })
+                    .put("length", fragmentLength.ifBlank { "10-20" })
+                    .put("interval", fragmentInterval.ifBlank { "10-20" }))))
         }
         outbounds.put(JSONObject().put("tag", "direct").put("protocol", "freedom"))
         root.put("outbounds", outbounds)
@@ -153,10 +156,50 @@ object ConfigBuilder {
         return JSONObject().put("tag", "proxy").put("protocol", "wireguard").put("settings", settings)
     }
 
-    private fun buildStream(config: ProxyConfig): JSONObject {
-        val stream = JSONObject().put("network", config.network)
+    private fun normalizeNetwork(n: String): String = when (val v = n.trim().lowercase()) {
+        "", "raw" -> "tcp"
+        "mkcp" -> "kcp"
+        "websocket" -> "ws"
+        "h2", "http2" -> "http"
+        "splithttp" -> "xhttp"
+        else -> v
+    }
 
-        when (config.network) {
+    private fun csvArray(s: String): JSONArray {
+        val arr = JSONArray()
+        s.split(",").map { it.trim() }.filter { it.isNotEmpty() }.forEach { arr.put(it) }
+        return arr
+    }
+
+    private fun buildStream(config: ProxyConfig): JSONObject {
+        val net = normalizeNetwork(config.network)
+        val stream = JSONObject().put("network", net)
+
+        when (net) {
+            "tcp" -> {
+                if (config.headerType.equals("http", ignoreCase = true)) {
+                    val request = JSONObject()
+                        .put("version", "1.1")
+                        .put("method", "GET")
+                        .put("path", csvArray(config.path.ifEmpty { "/" }))
+                    val headers = JSONObject()
+                    if (config.host.isNotEmpty()) headers.put("Host", csvArray(config.host))
+                    headers.put("User-Agent", JSONArray()
+                        .put("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"))
+                    headers.put("Accept-Encoding", JSONArray().put("gzip, deflate"))
+                    headers.put("Connection", JSONArray().put("keep-alive"))
+                    headers.put("Pragma", "no-cache")
+                    request.put("headers", headers)
+                    stream.put("tcpSettings", JSONObject().put("header",
+                        JSONObject().put("type", "http").put("request", request)))
+                }
+            }
+            "kcp" -> {
+                val kcp = JSONObject().put("header",
+                    JSONObject().put("type", config.headerType.ifEmpty { "none" }))
+                if (config.path.isNotEmpty()) kcp.put("seed", config.path)
+                stream.put("kcpSettings", kcp)
+            }
             "ws" -> {
                 val ws = JSONObject().put("path", config.path.ifEmpty { "/" })
                 if (config.host.isNotEmpty()) ws.put("headers", JSONObject().put("Host", config.host))
@@ -167,7 +210,7 @@ object ConfigBuilder {
                 if (config.host.isNotEmpty()) hu.put("host", config.host)
                 stream.put("httpupgradeSettings", hu)
             }
-            "xhttp", "splithttp" -> {
+            "xhttp" -> {
                 val xh = JSONObject().put("path", config.path.ifEmpty { "/" })
                 if (config.host.isNotEmpty()) xh.put("host", config.host)
                 if (config.mode.isNotEmpty()) xh.put("mode", config.mode)
@@ -178,9 +221,9 @@ object ConfigBuilder {
                     .put("serviceName", config.serviceName)
                     .put("multiMode", config.mode == "multi"))
             }
-            "http", "h2" -> {
+            "http" -> {
                 val h = JSONObject().put("path", config.path.ifEmpty { "/" })
-                if (config.host.isNotEmpty()) h.put("host", JSONArray().put(config.host))
+                if (config.host.isNotEmpty()) h.put("host", csvArray(config.host))
                 stream.put("httpSettings", h)
             }
         }
@@ -191,12 +234,13 @@ object ConfigBuilder {
                 .put("shortId", config.shortId).put("fingerprint", config.fingerprint).put("spiderX", "/"))
             "tls" -> {
                 val tls = JSONObject()
-                    .put("serverName", config.sni.ifEmpty { config.host.ifEmpty { config.address } })
+                    .put("serverName", config.sni.ifEmpty {
+                        config.host.substringBefore(",").trim().ifEmpty { config.address }
+                    })
                     .put("fingerprint", config.fingerprint)
                 if (config.alpn.isNotEmpty()) {
-                    val arr = JSONArray()
-                    config.alpn.split(",").map { it.trim() }.filter { it.isNotEmpty() }.forEach { arr.put(it) }
-                    tls.put("alpn", arr)
+                    val arr = csvArray(config.alpn)
+                    if (arr.length() > 0) tls.put("alpn", arr)
                 }
                 stream.put("security", "tls").put("tlsSettings", tls)
             }

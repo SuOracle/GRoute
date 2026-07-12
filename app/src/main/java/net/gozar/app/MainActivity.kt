@@ -58,6 +58,7 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -87,7 +88,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.size
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
@@ -115,6 +115,12 @@ import androidx.compose.material.icons.filled.SportsEsports
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.NetworkCheck
+import dev.chrisbanes.haze.HazeState
+import dev.chrisbanes.haze.HazeTint
+import dev.chrisbanes.haze.hazeEffect
+import dev.chrisbanes.haze.hazeSource
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Delete
@@ -223,11 +229,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.net.URL
 import java.time.LocalDate
 import kotlin.math.round
@@ -401,6 +409,8 @@ private fun WelcomeScreen(onDone: () -> Unit) {
         )
     }
 }
+internal val LocalHazeState = compositionLocalOf<HazeState?> { null }
+
 class MainActivity : ComponentActivity() {
 
     private lateinit var store: ConfigStore
@@ -422,7 +432,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        store = ConfigStore(applicationContext)
+        store = ConfigStore.get(applicationContext)
         UsageStore.init(applicationContext)
         VpnBridge.register(applicationContext)
         runCatching { startService(Intent(this, GozarVpnService::class.java).setAction(GozarVpnService.ACTION_WARM)) }
@@ -470,7 +480,7 @@ class MainActivity : ComponentActivity() {
                         if (welcome) {
                             WelcomeScreen(onDone = { showWelcome = false })
                         } else {
-                            GozarApp(store = store, onConnect = ::connectTo, onDisconnect = ::disconnect)
+                            GozarApp(store = store, onConnect = ::connectTo, onDisconnect = ::disconnect, onSwitch = ::switchTo)
                         }
                     }
                 }
@@ -514,6 +524,19 @@ class MainActivity : ComponentActivity() {
         startService(Intent(this, GozarVpnService::class.java).setAction(GozarVpnService.ACTION_STOP))
     }
 
+    private fun switchTo(config: ProxyConfig) {
+        val s = VpnState.state.value
+        if (s != Connection.CONNECTED && s != Connection.CONNECTING) { connectTo(config); return }
+        lifecycleScope.launch {
+            startService(Intent(this@MainActivity, GozarVpnService::class.java).setAction(GozarVpnService.ACTION_STOP))
+            withTimeoutOrNull(6000) {
+                VpnState.state.first { it == Connection.DISCONNECTED || it == Connection.ERROR }
+            }
+            delay(400)
+            connectTo(config)
+        }
+    }
+
     private fun warm() {
         val s = VpnState.state.value
         if (s == Connection.CONNECTING || s == Connection.CONNECTED) return
@@ -528,7 +551,8 @@ class MainActivity : ComponentActivity() {
 private fun GozarApp(
     store: ConfigStore,
     onConnect: (ProxyConfig) -> Unit,
-    onDisconnect: () -> Unit
+    onDisconnect: () -> Unit,
+    onSwitch: (ProxyConfig) -> Unit
 ) {
     val t = stringsFn()
     val scope = rememberCoroutineScope()
@@ -578,7 +602,8 @@ private fun GozarApp(
     var stabilityDetail by remember { mutableStateOf(false) }
     var aboutDetail by remember { mutableStateOf(false) }
     var cleanIpDetail by remember { mutableStateOf(false) }
-    var sortBySpeed by remember { mutableStateOf(false) }
+    var donationDetail by remember { mutableStateOf(false) }
+    val sortBySpeed by store.sortBySpeed.collectAsState()
     var sortExpanded by remember { mutableStateOf(false) }
     val selectedId by store.selectedId.collectAsState()
     val pings = remember { mutableStateMapOf<String, PingResult>() }
@@ -611,7 +636,7 @@ private fun GozarApp(
 
     val page = pagerState.currentPage
     val onSettingsTab = page == 1
-    val subScreenOpen = (page == 0 && (showPicker || showManual)) || (onSettingsTab && (usageDetail || perAppDetail || logsDetail || stabilityDetail || aboutDetail || cleanIpDetail))
+    val subScreenOpen = (page == 0 && (showPicker || showManual)) || (onSettingsTab && (usageDetail || perAppDetail || logsDetail || stabilityDetail || aboutDetail || cleanIpDetail || donationDetail))
 
     val screenKey = when {
         page == 0 && showManual -> "manual"
@@ -623,6 +648,7 @@ private fun GozarApp(
         onSettingsTab && stabilityDetail -> "stability"
         onSettingsTab && aboutDetail -> "about"
         onSettingsTab && cleanIpDetail -> "cleanip"
+        onSettingsTab && donationDetail -> "donation"
         else -> "settings"
     }
 
@@ -636,6 +662,7 @@ private fun GozarApp(
             stabilityDetail -> stabilityDetail = false
             aboutDetail -> aboutDetail = false
             cleanIpDetail -> cleanIpDetail = false
+            donationDetail -> donationDetail = false
             onSettingsTab -> scope.launch { pagerState.animateScrollToPage(0) }
         }
     }
@@ -685,6 +712,7 @@ private fun GozarApp(
                                 "stability" -> t("stab_title")
                                 "about" -> t("about")
                                 "cleanip" -> t("scan_title")
+                                "donation" -> if (LocalLang.current == Lang.FA) "حمایت از ما" else "Support Us"
                                 else -> t("settings")
                             }
                         )
@@ -700,6 +728,7 @@ private fun GozarApp(
                         "stability" -> BounceIconButton(onClick = { stabilityDetail = false }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
                         "about" -> BounceIconButton(onClick = { aboutDetail = false }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
                         "cleanip" -> BounceIconButton(onClick = { cleanIpDetail = false }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
+                        "donation" -> BounceIconButton(onClick = { donationDetail = false }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
                     }
                 },
                 actions = {
@@ -710,11 +739,11 @@ private fun GozarApp(
                         DropdownMenu(expanded = sortExpanded, onDismissRequest = { sortExpanded = false }) {
                             DropdownMenuItem(
                                 text = { Text((if (!sortBySpeed) "✓ " else "") + t("default_order")) },
-                                onClick = { sortBySpeed = false; sortExpanded = false }
+                                onClick = { store.setSortBySpeed(false); sortExpanded = false }
                             )
                             DropdownMenuItem(
                                 text = { Text((if (sortBySpeed) "✓ " else "") + t("fastest_first")) },
-                                onClick = { sortBySpeed = true; sortExpanded = false }
+                                onClick = { store.setSortBySpeed(true); sortExpanded = false }
                             )
                         }
                     }
@@ -759,6 +788,7 @@ private fun GozarApp(
                         stabilityDetail = false
                         aboutDetail = false
                         cleanIpDetail = false
+                        donationDetail = false
                         scope.launch { pagerState.animateScrollToPage(1) }
                     },
                     icon = { Icon(Icons.Filled.Settings, contentDescription = null) },
@@ -806,7 +836,14 @@ private fun GozarApp(
                             selectedId = selectedId,
                             sortBySpeed = sortBySpeed,
                             pings = pings,
-                            onSelect = { store.setSelectedId(it); showPicker = false },
+                            onSelect = { id ->
+                                store.setSelectedId(id)
+                                showPicker = false
+                                val st = VpnState.state.value
+                                if ((st == Connection.CONNECTED || st == Connection.CONNECTING) && id != VpnState.activeId.value) {
+                                    store.configs.value.find { c -> c.id == id }?.let(onSwitch)
+                                }
+                            },
                             onEdit = { editingConfig = it; showManual = true },
                             onAddManually = { showManual = true }
                         )
@@ -827,12 +864,13 @@ private fun GozarApp(
                     stabilityDetail -> "stability"
                     aboutDetail -> "about"
                     cleanIpDetail -> "cleanip"
+                    donationDetail -> "donation"
                     else -> "settings"
                 }
                 AnimatedContent(
                     targetState = setKey,
                     transitionSpec = {
-                        if (targetState == "usage" || targetState == "perapp" || targetState == "logs" || targetState == "stability" || targetState == "about" || targetState == "cleanip") {
+                        if (targetState == "usage" || targetState == "perapp" || targetState == "logs" || targetState == "stability" || targetState == "about" || targetState == "cleanip" || targetState == "donation") {
                             slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Left, tween(250)) togetherWith
                                     slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Left, tween(250))
                         } else {
@@ -849,6 +887,7 @@ private fun GozarApp(
                         "stability" -> StabilityTestScreen(store = store)
                         "about" -> AboutScreen()
                         "cleanip" -> CleanIpScreen()
+                        "donation" -> DonationScreen()
                         else -> SettingsScreen(
                             store = store,
                             scrollState = settingsScroll,
@@ -857,7 +896,8 @@ private fun GozarApp(
                             onOpenLogs = { logsDetail = true },
                             onOpenStability = { stabilityDetail = true },
                             onOpenAbout = { aboutDetail = true },
-                            onOpenCleanIp = { cleanIpDetail = true }
+                            onOpenCleanIp = { cleanIpDetail = true },
+                            onOpenDonation = { donationDetail = true }
                         )
                     }
                 }
@@ -903,132 +943,131 @@ private fun ConnectionScreen(
     val selectedConfig = configs.find { it.id == selectedId }
     val connected = conn == Connection.CONNECTED || conn == Connection.CONNECTING
 
-    Column(
-        modifier.fillMaxSize().padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        Card(
-            modifier = Modifier.fillMaxWidth()
-                .clip(RoundedCornerShape(20.dp))
-                .clickable(enabled = !connected) { onOpenPicker() },
-            shape = RoundedCornerShape(20.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
-        ) {
-            Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    if (selectedConfig != null) {
-                        Text(t("selected_server"), style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(selectedConfig.name, style = MaterialTheme.typography.titleMedium)
-                        Text(n("${selectedConfig.address}:${selectedConfig.port}"), style = MaterialTheme.typography.bodySmall)
-                    } else {
-                        Text(t("tap_choose"), style = MaterialTheme.typography.titleMedium)
-                    }
-                }
-                if (!connected) Icon(Icons.Filled.ChevronRight, contentDescription = null)
-            }
-        }
-
-        var btnPressed by remember { mutableStateOf(false) }
-        val glowActive = !connected && selectedConfig != null && !btnPressed
-        val glowAlpha by animateFloatAsState(
-            targetValue = if (glowActive) 1f else 0f,
-            animationSpec = tween(300),
-            label = "glowAlpha"
-        )
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .height(64.dp)
-                .pointerInput(Unit) {
-                    awaitEachGesture {
-                        awaitFirstDown(requireUnconsumed = false)
-                        btnPressed = true
-                        waitForUpOrCancellation()
-                        btnPressed = false
-                    }
-                }
-        ) {
-            BounceButton(
-                onClick = {
-                    if (connected) onDisconnect()
-                    else selectedConfig?.let { onConnect(it) }
-                },
-                enabled = connected || selectedConfig != null,
-                modifier = Modifier.matchParentSize()
+    val hazeState = remember { HazeState() }
+    Box(modifier.fillMaxSize()) {
+        ParticleField(Modifier.fillMaxSize().hazeSource(hazeState))
+        CompositionLocalProvider(LocalHazeState provides hazeState) {
+            Column(
+                Modifier.fillMaxSize().padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                Text(
-                    when {
-                        conn == Connection.CONNECTING -> t("connecting_cancel")
-                        connected -> t("disconnect")
-                        else -> t("connect")
-                    },
-                    style = MaterialTheme.typography.titleMedium
-                )
-            }
-            if (selectedConfig != null && glowAlpha > 0.001f) {
-                ConnectGlow(
-                    color = MaterialTheme.colorScheme.primary,
-                    alpha = glowAlpha,
-                    modifier = Modifier.matchParentSize()
-                )
-            }
-        }
-
-        AnimatedVisibility(
-            visible = conn == Connection.CONNECTED,
-            enter = fadeIn(tween(300)) + expandVertically(tween(300)),
-            exit = fadeOut(tween(200)) + shrinkVertically(tween(200))
-        ) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Filled.ArrowDownward, contentDescription = null, modifier = Modifier.size(18.dp))
-                        SpeedText(downSpeed)
-                        Spacer(Modifier.width(14.dp))
-                        Icon(Icons.Filled.ArrowUpward, contentDescription = null, modifier = Modifier.size(18.dp))
-                        SpeedText(upSpeed)
-                    }
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Filled.ArrowDownward, contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(14.dp))
-                        Text(formatBytes(totalDown, lang), style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Spacer(Modifier.width(12.dp))
-                        Icon(Icons.Filled.ArrowUpward, contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(14.dp))
-                        Text(formatBytes(totalUp, lang), style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
-                BounceOutlinedButton(
-                    onClick = {
-                        delayRunning = true; delayResult = null
-                        scope.launch {
-                            val ms = SpeedTest.delay()
-                            delayResult = if (ms != null) "${localizeDigits("$ms", lang)} ${t("unit_ms")}" else t("delay_failed")
-                            delayRunning = false
-                        }
-                    },
-                    enabled = !delayRunning,
-                    modifier = Modifier.defaultMinSize(minWidth = 88.dp),
-                    minHeight = 38.dp,
-                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                Card(
+                    modifier = Modifier.fillMaxWidth()
+                        .clip(RoundedCornerShape(20.dp))
+                        .clickable { onOpenPicker() },
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
                 ) {
-                    Text(
-                        when {
-                            delayRunning -> "…"
-                            delayResult != null -> delayResult!!
-                            else -> t("real_delay")
-                        },
-                        style = MaterialTheme.typography.labelLarge,
-                        maxLines = 1
-                    )
+                    Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            if (selectedConfig != null) {
+                                Text(t("selected_server"), style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(selectedConfig.name, style = MaterialTheme.typography.titleMedium)
+                                Text(n("${selectedConfig.address}:${selectedConfig.port}"), style = MaterialTheme.typography.bodySmall)
+                            } else {
+                                Text(t("tap_choose"), style = MaterialTheme.typography.titleMedium)
+                            }
+                        }
+                        Icon(Icons.Filled.ChevronRight, contentDescription = null)
+                    }
                 }
+
+                var btnPressed by remember { mutableStateOf(false) }
+                val glowActive = !connected && selectedConfig != null && !btnPressed
+                val glowAlpha by animateFloatAsState(
+                    targetValue = if (glowActive) 1f else 0f,
+                    animationSpec = tween(300),
+                    label = "glowAlpha"
+                )
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(64.dp)
+                        .pointerInput(Unit) {
+                            awaitEachGesture {
+                                awaitFirstDown(requireUnconsumed = false)
+                                btnPressed = true
+                                waitForUpOrCancellation()
+                                btnPressed = false
+                            }
+                        }
+                ) {
+                    BounceButton(
+                        onClick = {
+                            if (connected) onDisconnect()
+                            else selectedConfig?.let { onConnect(it) }
+                        },
+                        enabled = connected || selectedConfig != null,
+                        modifier = Modifier.matchParentSize()
+                    ) {
+                        Text(
+                            when {
+                                conn == Connection.CONNECTING -> t("connecting_cancel")
+                                connected -> t("disconnect")
+                                else -> t("connect")
+                            },
+                            style = MaterialTheme.typography.titleMedium
+                        )
+                    }
+                    if (selectedConfig != null && glowAlpha > 0.001f) {
+                        ConnectGlow(
+                            color = MaterialTheme.colorScheme.primary,
+                            alpha = glowAlpha,
+                            modifier = Modifier.matchParentSize()
+                        )
+                    }
+                }
+
+                AnimatedVisibility(
+                    visible = conn == Connection.CONNECTED,
+                    enter = fadeIn(tween(300)) + expandVertically(tween(300)),
+                    exit = fadeOut(tween(200)) + shrinkVertically(tween(200))
+                ) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        StatBox(
+                            speed = downSpeed,
+                            total = totalDown,
+                            icon = Icons.Filled.ArrowDownward,
+                            color = Color(0xFF35E0FF),
+                            modifier = Modifier.weight(1f)
+                        )
+                        StatBox(
+                            speed = upSpeed,
+                            total = totalUp,
+                            icon = Icons.Filled.ArrowUpward,
+                            color = Color(0xFFFF4DD8),
+                            modifier = Modifier.weight(1f)
+                        )
+                        BounceOutlinedButton(
+                            onClick = {
+                                delayRunning = true; delayResult = null
+                                scope.launch {
+                                    val ms = SpeedTest.delay()
+                                    delayResult = if (ms != null) "${localizeDigits("$ms", lang)} ${t("unit_ms")}" else t("delay_failed")
+                                    delayRunning = false
+                                }
+                            },
+                            enabled = !delayRunning,
+                            minHeight = 44.dp,
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp)
+                        ) {
+                            when {
+                                delayRunning -> Text("…", style = MaterialTheme.typography.labelLarge)
+                                delayResult != null -> Text(delayResult!!, style = MaterialTheme.typography.labelMedium, maxLines = 1)
+                                else -> Icon(Icons.Filled.NetworkCheck, contentDescription = t("real_delay"), modifier = Modifier.size(20.dp))
+                            }
+                        }
+                    }
+                }
+
+                EarthSection(Modifier.weight(1f).fillMaxWidth())
             }
         }
-
-        EarthSection(Modifier.weight(1f).fillMaxWidth())
     }
 }
 
@@ -1637,6 +1676,7 @@ private fun SettingsScreen(
     onOpenStability: () -> Unit,
     onOpenAbout: () -> Unit,
     onOpenCleanIp: () -> Unit,
+    onOpenDonation: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val t = stringsFn()
@@ -1651,6 +1691,7 @@ private fun SettingsScreen(
     var langOpen by remember { mutableStateOf(false) }
     val autoRefreshHours by store.autoRefreshHours.collectAsState()
     var autoRefreshOpen by remember { mutableStateOf(false) }
+    val autoSelect by store.autoSelect.collectAsState()
 
     fun refreshLabel(h: Int): String =
         if (h <= 0) t("auto_refresh_off")
@@ -1699,6 +1740,12 @@ private fun SettingsScreen(
         }
 
         Text(t("routing"), style = MaterialTheme.typography.titleMedium)
+        SettingRow(
+            title = if (lang == Lang.FA) "انتخاب خودکار سریع‌ترین سرور" else "Auto-select fastest server",
+            subtitle = if (lang == Lang.FA) "هر ۶۰ ثانیه همه‌ی سرورها تست و سریع‌ترین انتخاب می‌شود" else "Pings all servers every 60s and switches to the lowest",
+            checked = autoSelect,
+            onCheckedChange = { store.setAutoSelect(it) }
+        )
         SettingRow(
             title = t("split_title"),
             subtitle = t("split_sub"),
@@ -1830,6 +1877,26 @@ private fun SettingsScreen(
                     Text(t("about_sub"), style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
+                Icon(Icons.Filled.ChevronRight, contentDescription = null)
+            }
+        }
+
+        Card(
+            modifier = Modifier.fillMaxWidth()
+                .clip(RoundedCornerShape(20.dp))
+                .clickable { onOpenDonation() },
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+        ) {
+            Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(if (lang == Lang.FA) "حمایت از ما" else "Support Us", style = MaterialTheme.typography.bodyLarge)
+                    Text(if (lang == Lang.FA) "با حمایت مالی، به توسعه جی روت و اینترنت آزاد کمک کنید" else "Donate to develope GRoute and Free internet",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Icon(Icons.Filled.Favorite, contentDescription = null,
+                    tint = Color(0xFF6D9BEE), modifier = Modifier.padding(end = 12.dp))
                 Icon(Icons.Filled.ChevronRight, contentDescription = null)
             }
         }
@@ -3008,26 +3075,29 @@ private fun UsageBarChart(bars: List<UsageStore.Bar>) {
 private fun SniffTypeSelector(selected: Set<String>, onToggle: (String) -> Unit) {
     val types = listOf("http", "tls", "quic", "fakedns", "fakedns+others")
     FlowRow(
-        modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         types.forEach { type ->
-            val checked = type in selected
-            Row(
+            val on = type in selected
+            val bg by animateColorAsState(
+                targetValue = if (on) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.surfaceVariant,
+                animationSpec = tween(200), label = "chipBg"
+            )
+            val fg by animateColorAsState(
+                targetValue = if (on) MaterialTheme.colorScheme.onPrimary
+                else MaterialTheme.colorScheme.onSurfaceVariant,
+                animationSpec = tween(200), label = "chipFg"
+            )
+            Box(
                 Modifier
-                    .clip(RoundedCornerShape(10.dp))
-                    .border(
-                        1.dp,
-                        if (checked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
-                        RoundedCornerShape(10.dp)
-                    )
+                    .clip(RoundedCornerShape(50))
+                    .background(bg)
                     .clickable { onToggle(type) }
-                    .padding(end = 12.dp),
-                verticalAlignment = Alignment.CenterVertically
+                    .padding(horizontal = 14.dp, vertical = 8.dp)
             ) {
-                Checkbox(checked = checked, onCheckedChange = { onToggle(type) })
-                Text(type, style = MaterialTheme.typography.bodyMedium)
+                Text(type, color = fg, style = MaterialTheme.typography.labelLarge)
             }
         }
     }
@@ -3040,10 +3110,14 @@ private fun SettingRow(
     checked: Boolean,
     onCheckedChange: (Boolean) -> Unit
 ) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
         Column(Modifier.weight(1f)) {
             Text(title, style = MaterialTheme.typography.bodyLarge)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(subtitle, style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
@@ -3058,10 +3132,7 @@ private fun Modifier.pressBounce(
         awaitEachGesture {
             awaitFirstDown(requireUnconsumed = false)
             scope.launch {
-                scale.animateTo(
-                    0.96f,
-                    spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow)
-                )
+                scale.animateTo(0.9f, spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium))
             }
             waitForUpOrCancellation()
             scope.launch {
@@ -3087,6 +3158,8 @@ private fun FillButton(
     val onPrimary = MaterialTheme.colorScheme.onPrimary
     val disabled = primary.copy(alpha = 0.35f)
     val shape = RoundedCornerShape(16.dp)
+    val hazeState = LocalHazeState.current
+    val surfaceColor = MaterialTheme.colorScheme.surface
 
     val interaction = remember { MutableInteractionSource() }
     var center by remember { mutableStateOf(Offset.Zero) }
@@ -3115,6 +3188,14 @@ private fun FillButton(
         modifier
             .graphicsLayer { scaleX = scale; scaleY = scale }
             .clip(shape)
+            .then(
+                if (hazeState != null) Modifier.hazeEffect(hazeState) {
+                    blurRadius = 18.dp
+                    backgroundColor = surfaceColor
+                    tints = listOf(HazeTint(surfaceColor.copy(alpha = 0.30f)))
+                    noiseFactor = 0f
+                } else Modifier
+            )
             .drawBehind {
                 if (radius > 0.5f) drawCircle(color = primary, radius = radius, center = center)
             }
@@ -3239,6 +3320,54 @@ private fun SpeedText(bytes: Long) {
         style = MaterialTheme.typography.titleMedium,
         maxLines = 1
     )
+}
+
+@Composable
+private fun StatBox(
+    speed: Long,
+    total: Long,
+    icon: ImageVector,
+    color: Color,
+    modifier: Modifier = Modifier
+) {
+    val t = stringsFn()
+    val lang = LocalLang.current
+    val parts = formatBytesParts(speed, lang)
+    val hazeState = LocalHazeState.current
+    val surfaceColor = MaterialTheme.colorScheme.surface
+    Column(
+        modifier
+            .clip(RoundedCornerShape(14.dp))
+            .then(
+                if (hazeState != null) Modifier.hazeEffect(hazeState) {
+                    blurRadius = 16.dp
+                    backgroundColor = surfaceColor
+                    tints = listOf(HazeTint(surfaceColor.copy(alpha = 0.25f)))
+                    noiseFactor = 0f
+                } else Modifier
+            )
+            .background(color.copy(alpha = 0.12f))
+            .border(BorderStroke(1.dp, color.copy(alpha = 0.75f)), RoundedCornerShape(14.dp))
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(13.dp))
+            Spacer(Modifier.width(4.dp))
+            Text(
+                "\u202A${parts.first}\u202C ${parts.second}${t("unit_per_sec")}",
+                style = MaterialTheme.typography.bodySmall,
+                color = color,
+                maxLines = 1
+            )
+        }
+        Text(
+            formatBytes(total, lang),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1
+        )
+    }
 }
 
 private fun formatBytesParts(bytes: Long, lang: Lang): Pair<String, String> {
