@@ -14,6 +14,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 class QsTileService : TileService() {
 
@@ -31,6 +32,10 @@ class QsTileService : TileService() {
         scope = s
         collectJob = s.launch {
             VpnState.state.collect { render() }
+        }
+        s.launch {
+            ConfigStore.get(applicationContext).awaitReady()
+            render()
         }
         render()
     }
@@ -52,8 +57,17 @@ class QsTileService : TileService() {
     }
 
     private fun toggle() {
-        if (activeNow()) stopTunnel() else startTunnel()
-        render()
+        if (activeNow()) {
+            stopTunnel()
+            render()
+            return
+        }
+        val s = scope ?: CoroutineScope(Dispatchers.Main).also { scope = it }
+        s.launch {
+            withTimeoutOrNull(3000) { ConfigStore.get(applicationContext).awaitReady() }
+            startTunnel()
+            render()
+        }
     }
 
     private fun startTunnel() {

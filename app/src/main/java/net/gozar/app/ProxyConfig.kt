@@ -34,6 +34,7 @@ data class ProxyConfig(
     val mtu: Int = 0,
     val reserved: String = "",
     val source: ConfigSource = ConfigSource.PERSONAL,
+    val locked: Boolean = false,
     val id: String = UUID.randomUUID().toString()
 ) {
     fun toJson(): JSONObject = JSONObject()
@@ -48,7 +49,7 @@ data class ProxyConfig(
         .put("headerType", headerType)
         .put("subId", subId)
         .put("privateKey", privateKey).put("localAddress", localAddress)
-        .put("mtu", mtu).put("reserved", reserved)
+        .put("mtu", mtu).put("reserved", reserved).put("locked", locked)
 
     companion object {
         fun fromJson(o: JSONObject) = ProxyConfig(
@@ -80,6 +81,7 @@ data class ProxyConfig(
             mtu = o.optInt("mtu", 0),
             reserved = o.optString("reserved", ""),
             source = runCatching { ConfigSource.valueOf(o.optString("source", "PERSONAL")) }.getOrDefault(ConfigSource.PERSONAL),
+            locked = o.optBoolean("locked", false),
             id = o.optString("id", UUID.randomUUID().toString())
         )
     }

@@ -1,6 +1,26 @@
 import java.util.Properties
 import java.io.FileInputStream
 
+val localProps = Properties().apply {
+    val f = rootProject.file("local.properties")
+    if (f.exists()) f.reader(Charsets.UTF_8).use { load(it) }
+}
+
+fun localProp(key: String): String = localProps.getProperty(key, "")
+
+fun bcString(value: String): String = buildString {
+    append('"')
+    value.forEach { c ->
+        when {
+            c == '\\' -> append("\\\\")
+            c == '"' -> append("\\\"")
+            c.code in 32..126 -> append(c)
+            else -> append("\\u%04x".format(c.code))
+        }
+    }
+    append('"')
+}
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -27,6 +47,8 @@ android {
         versionName = "1.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         buildConfigField("String", "DEFAULT_SUB_URL", "\"${secrets.getProperty("DEFAULT_SUB_URL", "")}\"")
+        buildConfigField("String", "DONATION_CARD_NUMBER", bcString(localProp("DONATION_CARD_NUMBER")))
+        buildConfigField("String", "DONATION_CARD_HOLDER", bcString(localProp("DONATION_CARD_HOLDER")))
     }
 
     signingConfigs {

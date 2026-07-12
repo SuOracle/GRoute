@@ -12,6 +12,8 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import android.os.Build
+import android.view.View
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -33,6 +35,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -42,6 +45,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -49,6 +53,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
@@ -172,6 +177,24 @@ private object EarthMask {
     }
 }
 
+@Composable
+private fun globeFrameRateModifier(): Modifier {
+    return if (Build.VERSION.SDK_INT >= 35) {
+        Modifier.composed {
+            val view = LocalView.current
+            DisposableEffect(view) {
+                runCatching { view.setRequestedFrameRate(View.REQUESTED_FRAME_RATE_CATEGORY_HIGH) }
+                onDispose {
+                    runCatching { view.setRequestedFrameRate(View.REQUESTED_FRAME_RATE_CATEGORY_DEFAULT) }
+                }
+            }
+            this
+        }
+    } else Modifier
+}
+
+private const val GLOBE_RENDER_MAX = 512
+private const val GLOBE_RENDER_SCALE = 85
 private const val GLOBE_RAD_FRAC = 0.86
 
 private fun sampleMask(lon: Float, lat: Float): Float {
@@ -293,13 +316,14 @@ private fun sampleMaskNearest(lon: Float, lat: Float): Float {
 private fun renderRange(
     px: IntArray, lut: GlobeLut,
     cs: Float, sn: Float, ct: Float, st: Float, deg: Float,
-    bilinear: Boolean, from: Int, to: Int
+    bilinear: Boolean, start: Int, stride: Int
 ) {
     val idx = lut.idx; val dxA = lut.dx; val dyA = lut.dy; val tzA = lut.tz
     val shA = lut.shade; val spA = lut.spec; val lbA = lut.limb; val alA = lut.alpha
+    val n = lut.n
 
-    var k = from
-    while (k < to) {
+    var k = start
+    while (k < n) {
         val dx = dxA[k]; val dy = dyA[k]; val tz = tzA[k]
         val ay = dy * ct + tz * st
         val rz = -dy * st + tz * ct
@@ -329,7 +353,7 @@ private fun renderRange(
         var g2 = fg.toInt(); if (g2 > 255) g2 = 255
         var b2 = fb.toInt(); if (b2 > 255) b2 = 255
         px[idx[k]] = alA[k] or (r2 shl 16) or (g2 shl 8) or b2
-        k++
+        k += stride
     }
 }
 
@@ -338,17 +362,14 @@ private val RENDER_CORES = Runtime.getRuntime().availableProcessors().coerceIn(2
 private suspend fun renderGlobeParallel(
     px: IntArray, lut: GlobeLut, spin: Float, tilt: Float, bilinear: Boolean
 ) = coroutineScope {
-    java.util.Arrays.fill(px, 0)
     val cs = cos(spin); val sn = sin(spin)
     val ct = cos(tilt); val st = sin(tilt)
     val deg = (180.0 / Math.PI).toFloat()
     val n = lut.n
     if (n == 0) return@coroutineScope
-    val chunk = (n + RENDER_CORES - 1) / RENDER_CORES
     (0 until RENDER_CORES).map { c ->
         launch(Dispatchers.Default) {
-            val from = c * chunk
-            if (from < n) renderRange(px, lut, cs, sn, ct, st, deg, bilinear, from, minOf(from + chunk, n))
+            renderRange(px, lut, cs, sn, ct, st, deg, bilinear, c, RENDER_CORES)
         }
     }.joinAll()
 }
@@ -460,7 +481,7 @@ fun EarthSection(modifier: Modifier = Modifier) {
             val popupWpx = with(density) { 170.dp.toPx() }
             val popupHpx = with(density) { 58.dp.toPx() }
 
-            val bs = remember(sidePx) { sidePx.roundToInt().coerceIn(96, 640) }
+            val bs = remember(sidePx) { (sidePx.roundToInt() * GLOBE_RENDER_SCALE / 100).coerceIn(96, GLOBE_RENDER_MAX) }
             var lut by remember(bs) { mutableStateOf<GlobeLut?>(null) }
             val px = remember(bs) { IntArray(bs * bs) }
             val bmp = remember(bs) {
@@ -476,8 +497,16 @@ fun EarthSection(modifier: Modifier = Modifier) {
             var renderedTilt by remember { mutableStateOf(0f) }
             var front = remember(bs) { 0 }
 
+            LaunchedEffect(Unit) {
+                withContext(Dispatchers.Default) { EarthMask.data }
+            }
+
             LaunchedEffect(bs) {
-                lut = withContext(Dispatchers.Default) { GlobeLut(bs) }
+                delay(350)
+                lut = withContext(Dispatchers.Default) {
+                    EarthMask.data
+                    GlobeLut(bs)
+                }
             }
 
             LaunchedEffect(bs, lut) {
@@ -499,10 +528,13 @@ fun EarthSection(modifier: Modifier = Modifier) {
             Box(
                 Modifier
                     .size(side)
+                    .then(globeFrameRateModifier())
                     .graphicsLayer {
-                        alpha = introAlpha
-                        scaleX = introScale
-                        scaleY = introScale
+                        val a = if (introAlpha.isNaN()) 1f else introAlpha
+                        val sc = if (introScale.isNaN()) 1f else introScale
+                        alpha = a
+                        scaleX = sc
+                        scaleY = sc
                     }
                     .pointerInput(Unit) {
                         detectDragGestures { change, drag ->

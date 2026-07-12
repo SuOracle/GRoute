@@ -1,10 +1,17 @@
 package net.gozar.app
 
 import android.content.Context
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONArray
+import java.util.concurrent.Executors
 
 enum class PerAppMode { OFF, ALLOWLIST, BLOCKLIST }
 enum class ThemeMode { SYSTEM, LIGHT, DARK, AMOLED }
@@ -12,11 +19,30 @@ class ConfigStore private constructor(context: Context) {
 
     private val prefs = context.getSharedPreferences("gozarnet", Context.MODE_PRIVATE)
 
-    private val _configs = MutableStateFlow(loadConfigs())
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    private val writeDispatcher =
+        Executors.newSingleThreadExecutor { r -> Thread(r, "gozar-config-io") }.asCoroutineDispatcher()
+
+    private val loadedSignal = CompletableDeferred<Unit>()
+
+    suspend fun awaitReady() = loadedSignal.await()
+
+    private val _configs = MutableStateFlow<List<ProxyConfig>>(emptyList())
     val configs: StateFlow<List<ProxyConfig>> = _configs.asStateFlow()
 
-    private val _subscriptions = MutableStateFlow(loadSubscriptions())
+    private val _subscriptions = MutableStateFlow<List<Subscription>>(emptyList())
     val subscriptions: StateFlow<List<Subscription>> = _subscriptions.asStateFlow()
+
+    init {
+        scope.launch {
+            val cfgs = loadConfigs()
+            val subs = loadSubscriptions()
+            _configs.value = cfgs
+            _subscriptions.value = subs
+            loadedSignal.complete(Unit)
+        }
+    }
 
     private val _fragment = MutableStateFlow(prefs.getBoolean(KEY_FRAGMENT, false))
     val fragment: StateFlow<Boolean> = _fragment.asStateFlow()
@@ -143,8 +169,21 @@ class ConfigStore private constructor(context: Context) {
     }
 
     fun update(config: ProxyConfig) {
-        _configs.value = _configs.value.map { if (it.id == config.id) config else it }
+        _configs.value = _configs.value.map { existing ->
+            when {
+                existing.id != config.id -> existing
+                existing.locked -> existing.copy(name = config.name)
+                else -> config
+            }
+        }
         persistConfigs()
+    }
+
+    fun addImported(imported: List<ProxyConfig>): Int {
+        if (imported.isEmpty()) return 0
+        _configs.value = _configs.value + imported
+        persistConfigs()
+        return imported.size
     }
 
     fun delete(id: String) {
@@ -223,7 +262,9 @@ class ConfigStore private constructor(context: Context) {
     }
 
     private fun putSecret(key: String, json: String) {
-        prefs.edit().putString(key, Crypto.encrypt(json) ?: json).apply()
+        scope.launch(writeDispatcher) {
+            prefs.edit().putString(key, Crypto.encrypt(json) ?: json).apply()
+        }
     }
 
     private fun readSecret(key: String): String? {

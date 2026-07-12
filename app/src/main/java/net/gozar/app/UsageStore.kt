@@ -31,10 +31,30 @@ object UsageStore {
         synchronized(lock) {
             if (initialized) return
             prefs = context.applicationContext.getSharedPreferences("gozarnet_usage", Context.MODE_PRIVATE)
-            _usage.value = load(KEY_DAILY)
-            _hourly.value = load(KEY_HOURLY)
             initialized = true
         }
+        Thread({
+            val daily = load(KEY_DAILY)
+            val hourly = load(KEY_HOURLY)
+            synchronized(lock) {
+                _usage.value = mergeCounts(daily, _usage.value)
+                _hourly.value = trimHourly(mergeCounts(hourly, _hourly.value))
+            }
+        }, "usage-load").start()
+    }
+
+    private fun mergeCounts(
+        disk: Map<String, LongArray>,
+        mem: Map<String, LongArray>
+    ): Map<String, LongArray> {
+        if (mem.isEmpty()) return disk
+        val out = HashMap(disk)
+        mem.forEach { (k, v) ->
+            val cur = out[k]
+            out[k] = if (cur == null) v
+            else longArrayOf(cur[0] + v[0], cur[1] + v[1])
+        }
+        return out
     }
 
 

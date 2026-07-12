@@ -8,6 +8,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.PredictiveBackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.graphics.asImageBitmap
@@ -122,6 +123,9 @@ import dev.chrisbanes.haze.HazeTint
 import dev.chrisbanes.haze.hazeEffect
 import dev.chrisbanes.haze.hazeSource
 import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.InsertDriveFile
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -205,11 +209,14 @@ import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.FileProvider
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
@@ -411,6 +418,13 @@ private fun WelcomeScreen(onDone: () -> Unit) {
 }
 internal val LocalHazeState = compositionLocalOf<HazeState?> { null }
 
+object ImportBus {
+    private val _pending = kotlinx.coroutines.flow.MutableStateFlow<ByteArray?>(null)
+    val pending: kotlinx.coroutines.flow.StateFlow<ByteArray?> = _pending
+    fun offer(bytes: ByteArray) { _pending.value = bytes }
+    fun clear() { _pending.value = null }
+}
+
 class MainActivity : ComponentActivity() {
 
     private lateinit var store: ConfigStore
@@ -435,7 +449,7 @@ class MainActivity : ComponentActivity() {
         store = ConfigStore.get(applicationContext)
         UsageStore.init(applicationContext)
         VpnBridge.register(applicationContext)
-        runCatching { startService(Intent(this, GozarVpnService::class.java).setAction(GozarVpnService.ACTION_WARM)) }
+        handleImportIntent(intent)
         lifecycleScope.launch {
             VpnState.state.collect { s ->
                 if (s == Connection.DISCONNECTED) {
@@ -444,11 +458,27 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-        Gozarcore.setLogger(object : gozarcore.Logger {
-            override fun log(line: String?) {
-                android.util.Log.i("XrayCore", line ?: "")
+        lifecycleScope.launch(Dispatchers.Default) {
+            Gozarcore.setLogger(object : gozarcore.Logger {
+                override fun log(line: String?) {
+                    android.util.Log.i("XrayCore", line ?: "")
+                }
+            })
+            withContext(Dispatchers.Main) { warm() }
+        }
+        lifecycleScope.launch {
+            store.configs.collect { list ->
+                val anyLocked = list.any { it.locked }
+                if (anyLocked) {
+                    window.setFlags(
+                        android.view.WindowManager.LayoutParams.FLAG_SECURE,
+                        android.view.WindowManager.LayoutParams.FLAG_SECURE
+                    )
+                } else {
+                    window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
+                }
             }
-        })
+        }
         setContent {
             val themeMode by store.themeMode.collectAsState()
             val dark = when (themeMode) {
@@ -472,19 +502,50 @@ class MainActivity : ComponentActivity() {
                     LocalLayoutDirection provides direction
                 ) {
                     var showWelcome by remember { mutableStateOf(true) }
-                    AnimatedContent(
-                        targetState = showWelcome,
-                        transitionSpec = { fadeIn(tween(400)) togetherWith fadeOut(tween(400)) },
-                        label = "welcome"
-                    ) { welcome ->
-                        if (welcome) {
-                            WelcomeScreen(onDone = { showWelcome = false })
-                        } else {
+                    var startMain by remember { mutableStateOf(false) }
+                    LaunchedEffect(Unit) {
+                        delay(1100)
+                        startMain = true
+                    }
+                    Box {
+                        if (startMain) {
                             GozarApp(store = store, onConnect = ::connectTo, onDisconnect = ::disconnect, onSwitch = ::switchTo)
+                        }
+                        AnimatedVisibility(
+                            visible = showWelcome,
+                            exit = fadeOut(tween(400))
+                        ) {
+                            WelcomeScreen(onDone = { showWelcome = false })
                         }
                     }
                 }
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleImportIntent(intent)
+    }
+
+    private fun handleImportIntent(intent: Intent?) {
+        intent ?: return
+        val uri = when (intent.action) {
+            Intent.ACTION_VIEW -> intent.data
+            Intent.ACTION_SEND ->
+                if (android.os.Build.VERSION.SDK_INT >= 33)
+                    intent.getParcelableExtra(Intent.EXTRA_STREAM, android.net.Uri::class.java)
+                else @Suppress("DEPRECATION") (intent.getParcelableExtra(Intent.EXTRA_STREAM) as? android.net.Uri)
+            else -> null
+        } ?: return
+        lifecycleScope.launch {
+            val bytes = withContext(Dispatchers.IO) {
+                runCatching {
+                    contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                }.getOrNull()
+            }
+            if (bytes != null && bytes.isNotEmpty()) ImportBus.offer(bytes)
         }
     }
 
@@ -603,12 +664,14 @@ private fun GozarApp(
     var aboutDetail by remember { mutableStateOf(false) }
     var cleanIpDetail by remember { mutableStateOf(false) }
     var donationDetail by remember { mutableStateOf(false) }
+    var exportConfigs by remember { mutableStateOf<List<ProxyConfig>?>(null) }
     val sortBySpeed by store.sortBySpeed.collectAsState()
     var sortExpanded by remember { mutableStateOf(false) }
     val selectedId by store.selectedId.collectAsState()
     val pings = remember { mutableStateMapOf<String, PingResult>() }
 
     LaunchedEffect(Unit) {
+        store.awaitReady()
         store.seedDefaultSubscriptionIfNeeded()
         store.migrateDefaultSubUrlIfNeeded()
         store.defaultSubPendingFirstFetch()?.let { sub ->
@@ -634,11 +697,90 @@ private fun GozarApp(
         }
     }
 
+    val importContext = LocalContext.current
+    val pendingImport by ImportBus.pending.collectAsState()
+    var importNeedsPassword by remember { mutableStateOf(false) }
+    var importPassword by remember { mutableStateOf("") }
+    var importError by remember { mutableStateOf("") }
+    var importBusy by remember { mutableStateOf(false) }
+
+    LaunchedEffect(pendingImport) {
+        val bytes = pendingImport ?: return@LaunchedEffect
+        importPassword = ""
+        importError = ""
+        importNeedsPassword = runCatching { ConfigFile.isPasswordProtected(bytes) }.getOrDefault(false)
+        if (!importNeedsPassword) {
+            val configs = withContext(Dispatchers.Default) {
+                runCatching { ConfigFile.decode(importContext, bytes, null) }.getOrNull()
+            }
+            if (configs != null) {
+                val n = store.addImported(configs)
+                android.widget.Toast.makeText(importContext, t("import_success").format(n), android.widget.Toast.LENGTH_SHORT).show()
+                ImportBus.clear()
+            } else {
+                importNeedsPassword = true
+            }
+        }
+    }
+
+    if (pendingImport != null && importNeedsPassword) {
+        AlertDialog(
+            onDismissRequest = { if (!importBusy) { ImportBus.clear() } },
+            title = { Text(t("import_title")) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(t("import_needs_password"), style = MaterialTheme.typography.bodySmall)
+                    OutlinedTextField(
+                        importPassword, { importPassword = it; importError = "" },
+                        label = { Text(t("import_password")) },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (importError.isNotEmpty())
+                        Text(importError, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !importBusy && importPassword.isNotEmpty(),
+                    onClick = {
+                        val bytes = pendingImport ?: return@TextButton
+                        importBusy = true
+                        scope.launch {
+                            val configs = withContext(Dispatchers.Default) {
+                                runCatching { ConfigFile.decode(importContext, bytes, importPassword) }
+                            }
+                            importBusy = false
+                            configs.onSuccess { list ->
+                                val n = store.addImported(list)
+                                android.widget.Toast.makeText(importContext, t("import_success").format(n), android.widget.Toast.LENGTH_SHORT).show()
+                                ImportBus.clear()
+                                importNeedsPassword = false
+                            }.onFailure { e ->
+                                importError = when (e) {
+                                    is ConfigFile.WrongPassword -> t("import_wrong_password")
+                                    is ConfigFile.ForeignApp -> t("import_foreign_app")
+                                    else -> t("import_bad_file")
+                                }
+                            }
+                        }
+                    }
+                ) { Text(t("import_button")) }
+            },
+            dismissButton = {
+                TextButton(onClick = { if (!importBusy) ImportBus.clear() }) { Text(t("cancel")) }
+            }
+        )
+    }
+
     val page = pagerState.currentPage
     val onSettingsTab = page == 1
-    val subScreenOpen = (page == 0 && (showPicker || showManual)) || (onSettingsTab && (usageDetail || perAppDetail || logsDetail || stabilityDetail || aboutDetail || cleanIpDetail || donationDetail))
+    val subScreenOpen = (page == 0 && (showPicker || showManual || exportConfigs != null)) || (onSettingsTab && (usageDetail || perAppDetail || logsDetail || stabilityDetail || aboutDetail || cleanIpDetail || donationDetail))
 
     val screenKey = when {
+        page == 0 && exportConfigs != null -> "export"
         page == 0 && showManual -> "manual"
         page == 0 && showPicker -> "picker"
         page == 0 -> "connection"
@@ -654,6 +796,7 @@ private fun GozarApp(
 
     fun pop() {
         when {
+            exportConfigs != null -> exportConfigs = null
             showManual -> { showManual = false; editingConfig = null }
             showPicker -> showPicker = false
             usageDetail -> usageDetail = false
@@ -705,6 +848,7 @@ private fun GozarApp(
                         Text(
                             when (screenKey) {
                                 "manual" -> if (editingConfig != null) t("edit_config_title") else t("add_config_title")
+                                "export" -> t("export_title")
                                 "picker" -> t("choose_server")
                                 "usage" -> t("data_usage")
                                 "perapp" -> t("per_app")
@@ -721,6 +865,7 @@ private fun GozarApp(
                 navigationIcon = {
                     when (screenKey) {
                         "manual" -> BounceIconButton(onClick = { showManual = false; editingConfig = null }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
+                        "export" -> BounceIconButton(onClick = { exportConfigs = null }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
                         "picker" -> BounceIconButton(onClick = { showPicker = false }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
                         "usage" -> BounceIconButton(onClick = { usageDetail = false }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
                         "perapp" -> BounceIconButton(onClick = { perAppDetail = false }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
@@ -810,6 +955,7 @@ private fun GozarApp(
         ) { p ->
             if (p == 0) {
                 val connKey = when {
+                    exportConfigs != null -> "export"
                     showManual -> "manual"
                     showPicker -> "picker"
                     else -> "connection"
@@ -823,6 +969,10 @@ private fun GozarApp(
                     label = "connTab"
                 ) { key ->
                     when (key) {
+                        "export" -> ExportConfigScreen(
+                            configs = exportConfigs ?: emptyList(),
+                            onCancel = { exportConfigs = null }
+                        )
                         "manual" -> ManualConfigScreen(
                             existing = editingConfig,
                             onSave = { cfg ->
@@ -845,7 +995,8 @@ private fun GozarApp(
                                 }
                             },
                             onEdit = { editingConfig = it; showManual = true },
-                            onAddManually = { showManual = true }
+                            onAddManually = { showManual = true },
+                            onShareFile = { exportConfigs = it }
                         )
                         else -> ConnectionScreen(
                             store = store,
@@ -883,7 +1034,7 @@ private fun GozarApp(
                     when (key) {
                         "usage" -> DataUsageScreen()
                         "perapp" -> AppProxyScreen(store = store)
-                        "logs" -> LogsScreen()
+                        "logs" -> LogsScreen(store = store)
                         "stability" -> StabilityTestScreen(store = store)
                         "about" -> AboutScreen()
                         "cleanip" -> CleanIpScreen()
@@ -964,7 +1115,19 @@ private fun ConnectionScreen(
                                 Text(t("selected_server"), style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                                 Text(selectedConfig.name, style = MaterialTheme.typography.titleMedium)
-                                Text(n("${selectedConfig.address}:${selectedConfig.port}"), style = MaterialTheme.typography.bodySmall)
+                                if (selectedConfig.locked) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(
+                                            Icons.Filled.Lock, contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(12.dp)
+                                        )
+                                        Spacer(Modifier.width(4.dp))
+                                        Text(t("locked_config"), style = MaterialTheme.typography.bodySmall)
+                                    }
+                                } else {
+                                    Text(n("${selectedConfig.address}:${selectedConfig.port}"), style = MaterialTheme.typography.bodySmall)
+                                }
                             } else {
                                 Text(t("tap_choose"), style = MaterialTheme.typography.titleMedium)
                             }
@@ -1081,6 +1244,7 @@ private fun ConfigPickerScreen(
     onSelect: (String) -> Unit,
     onEdit: (ProxyConfig) -> Unit,
     onAddManually: () -> Unit,
+    onShareFile: (List<ProxyConfig>) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val t = stringsFn()
@@ -1090,6 +1254,22 @@ private fun ConfigPickerScreen(
     val subscriptions by store.subscriptions.collectAsState()
     val activeId by VpnState.activeId.collectAsState()
     val clipboard = LocalClipboardManager.current
+    val pickerContext = LocalContext.current
+    val pickerScope = rememberCoroutineScope()
+    val filePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            pickerScope.launch {
+                val bytes: ByteArray? = withContext(Dispatchers.IO) {
+                    runCatching {
+                        pickerContext.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                    }.getOrNull()
+                }
+                if (bytes != null && bytes.isNotEmpty()) ImportBus.offer(bytes)
+            }
+        }
+    }
 
     var link by remember { mutableStateOf("") }
     var subStatus by remember { mutableStateOf("") }
@@ -1120,10 +1300,15 @@ private fun ConfigPickerScreen(
 
     fun sortMaybe(list: List<ProxyConfig>): List<ProxyConfig> =
         if (sortBySpeed) list.sortedBy { pingRank(pings[it.id]) } else list
-    val grouped = remember(configs, subscriptions, sortBySpeed, pings.toMap()) {
+    val pingSortKey = if (sortBySpeed) {
+        remember(configs, pings.toList()) {
+            configs.joinToString(",") { "${it.id}:${pingRank(pings[it.id])}" }
+        }
+    } else 0
+    val grouped = remember(configs, subscriptions, sortBySpeed, pingSortKey) {
         subscriptions.map { sub -> sub to sortMaybe(configs.filter { it.subId == sub.id }) }
     }
-    val loose = remember(configs, sortBySpeed, pings.toMap()) {
+    val loose = remember(configs, sortBySpeed, pingSortKey) {
         sortMaybe(configs.filter { it.subId.isEmpty() })
     }
     fun displayedOrder(): List<String> = buildList {
@@ -1281,6 +1466,10 @@ private fun ConfigPickerScreen(
                     }
                     context.startActivity(Intent.createChooser(send, t("share")))
                 },
+                onShareFile = {
+                    onShareFile(configs.filter { selected.containsKey(it.id) })
+                    clearSel()
+                },
                 onDelete = { confirmDelete = true }
             )
         }
@@ -1319,6 +1508,10 @@ private fun ConfigPickerScreen(
                         }
                         CompactMenuItem(Icons.Filled.Add, t("add_manually")) {
                             addMenu = false; onAddManually()
+                        }
+                        CompactMenuItem(Icons.Filled.UploadFile, t("import_button")) {
+                            addMenu = false
+                            filePicker.launch(arrayOf("*/*"))
                         }
                         CompactMenuItem(Icons.Filled.Bolt, t("add_warp")) {
                             addMenu = false
@@ -1441,6 +1634,7 @@ private fun ConfigPickerScreen(
                             onLongPress = { beginPaint(cfg.id) },
                             onEdit = { onEdit(cfg) },
                             onDelete = { store.delete(cfg.id); pings.remove(cfg.id) },
+                            onShareFile = { onShareFile(listOf(cfg)) },
                             modifier = Modifier.animateItem()
                         )
                     }
@@ -1467,6 +1661,7 @@ private fun ConfigPickerScreen(
                         onLongPress = { beginPaint(cfg.id) },
                         onEdit = { onEdit(cfg) },
                         onDelete = { store.delete(cfg.id); pings.remove(cfg.id) },
+                        onShareFile = { onShareFile(listOf(cfg)) },
                         modifier = Modifier.animateItem()
                     )
                 }
@@ -1495,6 +1690,165 @@ private fun ConfigPickerScreen(
 }
 
 @Composable
+private fun ExportConfigScreen(
+    configs: List<ProxyConfig>,
+    onCancel: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val t = stringsFn()
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val multi = configs.size > 1
+
+    val defaultName = if (multi) "GRoute-configs" else (configs.firstOrNull()?.name?.ifBlank { "config" } ?: "config")
+    var fileName by remember { mutableStateOf(defaultName) }
+    var password by remember { mutableStateOf("") }
+    var showPassword by remember { mutableStateOf(false) }
+    var busy by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf("") }
+
+    Column(
+        modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp)
+    ) {
+        Card(
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f))
+        ) {
+            Row(
+                Modifier.fillMaxWidth().padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Filled.Lock, contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp)
+                )
+                Spacer(Modifier.width(12.dp))
+                Text(
+                    t("export_encrypted_note"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+
+        if (multi) {
+            Text(
+                t("export_count").format(configs.size),
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            OutlinedTextField(
+                fileName,
+                { fileName = it },
+                label = { Text(t("export_file_name")) },
+                singleLine = true,
+                shape = RoundedCornerShape(16.dp),
+                trailingIcon = {
+                    Text(
+                        ".grt",
+                        color = MaterialTheme.colorScheme.primary,
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(end = 14.dp)
+                    )
+                },
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            OutlinedTextField(
+                password,
+                { password = it },
+                label = { Text(t("export_password")) },
+                placeholder = { Text(t("export_password_hint"), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                singleLine = true,
+                visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Row(
+                Modifier.fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable { showPassword = !showPassword }
+                    .padding(vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Checkbox(checked = showPassword, onCheckedChange = { showPassword = it })
+                Text(t("show"), style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+
+        Row(verticalAlignment = Alignment.Top) {
+            Icon(
+                Icons.Filled.InsertDriveFile, contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp).padding(top = 2.dp)
+            )
+            Spacer(Modifier.width(10.dp))
+            Text(
+                t("export_locked_note"),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.weight(1f)
+            )
+        }
+
+        if (error.isNotEmpty())
+            Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+
+        Spacer(Modifier.height(2.dp))
+
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            BounceOutlinedButton(onClick = onCancel, modifier = Modifier.weight(1f)) { Text(t("cancel")) }
+            BounceButton(
+                onClick = {
+                    if (busy) return@BounceButton
+                    busy = true
+                    error = ""
+                    scope.launch {
+                        val result = runCatching {
+                            withContext(Dispatchers.Default) {
+                                val bytes = ConfigFile.encode(context, configs, password.ifBlank { null })
+                                ConfigFile.writeToCache(context, fileName, bytes)
+                            }
+                        }
+                        busy = false
+                        result.onSuccess { file ->
+                            val uri = FileProvider.getUriForFile(
+                                context, "${context.packageName}.fileprovider", file
+                            )
+                            val send = Intent(Intent.ACTION_SEND).apply {
+                                type = ConfigFile.MIME
+                                putExtra(Intent.EXTRA_STREAM, uri)
+                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            }
+                            context.startActivity(Intent.createChooser(send, t("export_continue")))
+                            onCancel()
+                        }.onFailure {
+                            error = t("import_bad_file")
+                        }
+                    }
+                },
+                enabled = !busy && fileName.isNotBlank(),
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(
+                    t("export_continue"),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun ManualConfigScreen(
     existing: ProxyConfig? = null,
     onSave: (ProxyConfig) -> Unit,
@@ -1503,6 +1857,40 @@ private fun ManualConfigScreen(
 ) {
     val t = stringsFn()
     var name by remember { mutableStateOf(existing?.name ?: "") }
+
+    if (existing?.locked == true) {
+        Column(
+            modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.Lock, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(t("locked_config"), style = MaterialTheme.typography.titleMedium)
+            }
+            Text(
+                t("locked_note"),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            OutlinedTextField(
+                name, { name = it },
+                label = { Text(t("name_optional")) },
+                singleLine = true,
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth()
+            )
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                BounceOutlinedButton(onClick = onCancel, modifier = Modifier.weight(1f)) { Text(t("cancel")) }
+                BounceButton(
+                    onClick = { onSave(existing.copy(name = name.ifBlank { existing.name })) },
+                    modifier = Modifier.weight(1f)
+                ) { Text(t("save")) }
+            }
+        }
+        return
+    }
+
     var protocol by remember { mutableStateOf(existing?.protocol ?: "vless") }
     var address by remember { mutableStateOf(existing?.address ?: "") }
     var port by remember { mutableStateOf(existing?.port?.takeIf { it > 0 }?.toString() ?: "") }
@@ -2145,16 +2533,18 @@ private val PRIVACY_FA = """
 """.trimIndent()
 
 @Composable
-private fun LogsScreen(modifier: Modifier = Modifier) {
+private fun LogsScreen(store: ConfigStore, modifier: Modifier = Modifier) {
     val t = stringsFn()
     val scope = rememberCoroutineScope()
     var logs by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(false) }
+    val configs by store.configs.collectAsState()
 
     fun load() {
         loading = true
         scope.launch {
-            val out = withContext(Dispatchers.IO) { readLogcat() }
+            val secrets = configs.filter { it.locked }
+            val out = withContext(Dispatchers.IO) { redactSecrets(readLogcat(), secrets) }
             logs = out
             loading = false
         }
@@ -2200,6 +2590,25 @@ private fun LogsScreen(modifier: Modifier = Modifier) {
             }
         }
     }
+}
+
+private fun redactSecrets(text: String, secrets: List<ProxyConfig>): String {
+    if (secrets.isEmpty() || text.isEmpty()) return text
+    var out = text
+    val tokens = LinkedHashSet<String>()
+    secrets.forEach { c ->
+        if (c.address.isNotBlank()) {
+            tokens.add("${c.address}:${c.port}")
+            tokens.add(c.address)
+        }
+        listOf(c.uuid, c.password, c.publicKey, c.shortId, c.privateKey, c.sni, c.host, c.serviceName)
+            .filter { it.length >= 4 }
+            .forEach { tokens.add(it) }
+    }
+    tokens.sortedByDescending { it.length }.forEach { token ->
+        out = out.replace(token, "[hidden]", ignoreCase = true)
+    }
+    return out
 }
 
 private fun readLogcat(): String = try {
@@ -3190,7 +3599,7 @@ private fun FillButton(
             .clip(shape)
             .then(
                 if (hazeState != null) Modifier.hazeEffect(hazeState) {
-                    blurRadius = 18.dp
+                    blurRadius = 10.dp
                     backgroundColor = surfaceColor
                     tints = listOf(HazeTint(surfaceColor.copy(alpha = 0.30f)))
                     noiseFactor = 0f
@@ -3335,29 +3744,31 @@ private fun StatBox(
     val parts = formatBytesParts(speed, lang)
     val hazeState = LocalHazeState.current
     val surfaceColor = MaterialTheme.colorScheme.surface
+    val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val accent = if (isDark) color else lerp(color, Color.Black, 0.42f)
     Column(
         modifier
             .clip(RoundedCornerShape(14.dp))
             .then(
                 if (hazeState != null) Modifier.hazeEffect(hazeState) {
-                    blurRadius = 16.dp
+                    blurRadius = 10.dp
                     backgroundColor = surfaceColor
                     tints = listOf(HazeTint(surfaceColor.copy(alpha = 0.25f)))
                     noiseFactor = 0f
                 } else Modifier
             )
-            .background(color.copy(alpha = 0.12f))
-            .border(BorderStroke(1.dp, color.copy(alpha = 0.75f)), RoundedCornerShape(14.dp))
+            .background(accent.copy(alpha = if (isDark) 0.12f else 0.10f))
+            .border(BorderStroke(1.dp, accent.copy(alpha = if (isDark) 0.75f else 0.55f)), RoundedCornerShape(14.dp))
             .padding(horizontal = 10.dp, vertical = 6.dp),
         verticalArrangement = Arrangement.spacedBy(2.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(13.dp))
+            Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(13.dp))
             Spacer(Modifier.width(4.dp))
             Text(
                 "\u202A${parts.first}\u202C ${parts.second}${t("unit_per_sec")}",
                 style = MaterialTheme.typography.bodySmall,
-                color = color,
+                color = accent,
                 maxLines = 1
             )
         }
@@ -3531,6 +3942,7 @@ private fun ConfigRow(
     onLongPress: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
+    onShareFile: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val t = stringsFn()
@@ -3564,10 +3976,22 @@ private fun ConfigRow(
             }
             Spacer(Modifier.width(10.dp))
             Column(Modifier.weight(1f)) {
-                MarqueeName(config.name)
+                if (config.locked) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(Icons.Filled.Lock, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(13.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Box(Modifier.weight(1f)) { MarqueeName(config.name) }
+                    }
+                } else {
+                    MarqueeName(config.name)
+                }
                 Text(
-                    if (isActive) "${localizeDigits("${config.address}:${config.port}", lang)}  •  ${t("status_connected")}"
-                    else localizeDigits("${config.address}:${config.port}", lang),
+                    when {
+                        config.locked && isActive -> "${t("locked_config")}  •  ${t("status_connected")}"
+                        config.locked -> t("locked_config")
+                        isActive -> "${localizeDigits("${config.address}:${config.port}", lang)}  •  ${t("status_connected")}"
+                        else -> localizeDigits("${config.address}:${config.port}", lang)
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1, overflow = TextOverflow.Ellipsis
@@ -3582,18 +4006,24 @@ private fun ConfigRow(
                         tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier.clip(CircleShape).clickable { shareMenu = true }.padding(8.dp).size(21.dp))
                     DropdownMenu(expanded = shareMenu, onDismissRequest = { shareMenu = false }) {
-                        CompactMenuItem(Icons.Filled.ContentCopy, t("share_clipboard")) {
-                            shareMenu = false
-                            clipboard.setText(AnnotatedString(ConfigShare.toLink(config)))
-                            android.widget.Toast.makeText(context, t("copied"), android.widget.Toast.LENGTH_SHORT).show()
-                        }
-                        CompactMenuItem(Icons.Filled.Share, t("share_app")) {
-                            shareMenu = false
-                            val send = Intent(Intent.ACTION_SEND).apply {
-                                type = "text/plain"
-                                putExtra(Intent.EXTRA_TEXT, ConfigShare.toLink(config))
+                        if (!config.locked) {
+                            CompactMenuItem(Icons.Filled.ContentCopy, t("share_clipboard")) {
+                                shareMenu = false
+                                clipboard.setText(AnnotatedString(ConfigShare.toLink(config)))
+                                android.widget.Toast.makeText(context, t("copied"), android.widget.Toast.LENGTH_SHORT).show()
                             }
-                            context.startActivity(Intent.createChooser(send, config.name))
+                            CompactMenuItem(Icons.Filled.Share, t("share_app")) {
+                                shareMenu = false
+                                val send = Intent(Intent.ACTION_SEND).apply {
+                                    type = "text/plain"
+                                    putExtra(Intent.EXTRA_TEXT, ConfigShare.toLink(config))
+                                }
+                                context.startActivity(Intent.createChooser(send, config.name))
+                            }
+                        }
+                        CompactMenuItem(Icons.Filled.InsertDriveFile, t("share_file")) {
+                            shareMenu = false
+                            onShareFile()
                         }
                     }
                 }
@@ -3614,6 +4044,7 @@ private fun SelectionActionBar(
     onClose: () -> Unit,
     onCopy: () -> Unit,
     onShareApp: () -> Unit,
+    onShareFile: () -> Unit,
     onDelete: () -> Unit
 ) {
     val t = stringsFn()
@@ -3645,6 +4076,7 @@ private fun SelectionActionBar(
                 DropdownMenu(expanded = shareMenu, onDismissRequest = { shareMenu = false }) {
                     CompactMenuItem(Icons.Filled.ContentCopy, t("share_clipboard")) { shareMenu = false; onCopy() }
                     CompactMenuItem(Icons.Filled.Share, t("share_app")) { shareMenu = false; onShareApp() }
+                    CompactMenuItem(Icons.Filled.InsertDriveFile, t("share_file")) { shareMenu = false; onShareFile() }
                 }
             }
             Icon(Icons.Filled.Delete, contentDescription = t("delete"),

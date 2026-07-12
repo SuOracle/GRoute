@@ -45,6 +45,7 @@ class AutoSelector(private val appContext: Context, private val store: ConfigSto
     }
 
     private suspend fun runOnce() = coroutineScope {
+        store.awaitReady()
         val configs = store.configs.value
         if (configs.isEmpty()) return@coroutineScope
 

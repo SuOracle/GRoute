@@ -1,30 +1,39 @@
+
 *.apk
 *.aab
 *.ap_
 *.dex
 *.class
-DonationScreen.kt
+*.jar
 
 .gradle/
-.kotlin/
 build/
 /app/build/
 /captures
-.externalNativeBuild/
 .cxx/
+.externalNativeBuild/
 *.hprof
 
-local.properties
+.kotlin/
 
 *.iml
 .idea/
+.navigation/
+misc.xml
+deploymentTargetDropDown.xml
+render.experimental.xml
+
+local.properties
 
 secrets.properties
-
+signing.properties
+keystore.properties
 *.jks
 *.keystore
-keystore.properties
-signing.properties
+release.jks
+keystore.b64
+
+/app/release.jks
 
 .DS_Store
 Thumbs.db

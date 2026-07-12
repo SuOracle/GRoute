@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class GozarApplication : Application() {
 
@@ -38,10 +39,9 @@ class GozarApplication : Application() {
             override fun onActivityDestroyed(activity: Activity) {}
         })
 
-        val store = ConfigStore.get(applicationContext)
-        val selector = AutoSelector(applicationContext, store)
-
         scope.launch {
+            val store = withContext(Dispatchers.IO) { ConfigStore.get(applicationContext) }
+            val selector = AutoSelector(applicationContext, store)
             combine(store.autoSelect, foreground) { enabled, fg -> enabled && fg }
                 .distinctUntilChanged()
                 .collect { on ->

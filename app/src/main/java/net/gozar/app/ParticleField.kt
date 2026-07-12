@@ -55,23 +55,28 @@ fun ParticleField(modifier: Modifier = Modifier) {
 
     LaunchedEffect(Unit) {
         var last = 0L
+        var lastStep = 0L
         while (isActive) {
             withFrameNanos { t ->
-                val dtMs = if (last == 0L) 0f else min(64f, (t - last) / 1_000_000f)
-                last = t
-                nowMs = t / 1_000_000
-                if (seeded && dtMs > 0f) {
-                    val s = dtMs / 1000f
-                    val m = 12f * density
-                    val w = fieldW
-                    val h = fieldH
-                    for (i in 0 until PARTICLE_COUNT) {
-                        xs[i] += vxs[i] * s
-                        ys[i] += vys[i] * s
-                        if (xs[i] < -m) xs[i] = w + m
-                        if (xs[i] > w + m) xs[i] = -m
-                        if (ys[i] < -m) ys[i] = h + m
-                        if (ys[i] > h + m) ys[i] = -m
+                val sinceStep = (t - lastStep) / 1_000_000f
+                if (lastStep == 0L || sinceStep >= 32f) {
+                    val dtMs = if (last == 0L) 0f else min(64f, (t - last) / 1_000_000f)
+                    last = t
+                    lastStep = t
+                    nowMs = t / 1_000_000
+                    if (seeded && dtMs > 0f) {
+                        val s = dtMs / 1000f
+                        val m = 12f * density
+                        val w = fieldW
+                        val h = fieldH
+                        for (i in 0 until PARTICLE_COUNT) {
+                            xs[i] += vxs[i] * s
+                            ys[i] += vys[i] * s
+                            if (xs[i] < -m) xs[i] = w + m
+                            if (xs[i] > w + m) xs[i] = -m
+                            if (ys[i] < -m) ys[i] = h + m
+                            if (ys[i] > h + m) ys[i] = -m
+                        }
                     }
                 }
             }

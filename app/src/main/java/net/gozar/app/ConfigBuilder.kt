@@ -16,7 +16,7 @@ object ConfigBuilder {
         fragmentInterval: String = "10-20"
     ): String {
         val root = JSONObject()
-        root.put("log", JSONObject().put("loglevel", "warning"))
+        root.put("log", JSONObject().put("loglevel", if (config.locked) "none" else "warning"))
 
         root.put("stats", JSONObject())
         root.put("policy", JSONObject().put("system", JSONObject()
