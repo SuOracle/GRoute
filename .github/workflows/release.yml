@@ -42,13 +42,14 @@ jobs:
           echo "DONATION_CARD_HOLDER=${{ secrets.DONATION_CARD_HOLDER }}" >> local.properties
 
       - name: Decode keystore
-        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > app/release.jks
+        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/release.jks"
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
       - name: Build signed release
         env:
+          KEYSTORE_FILE: ${{ runner.temp }}/release.jks
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
@@ -72,4 +73,4 @@ jobs:
 
       - name: Clean up secrets from runner
         if: always()
-        run: rm -f app/release.jks local.properties
+        run: rm -f "$RUNNER_TEMP/release.jks" local.properties
