@@ -78,6 +78,35 @@ class ConfigStore private constructor(context: Context) {
         prefs.edit().putBoolean(KEY_SNIFFING, enabled).apply()
     }
 
+    private val _killSwitch = MutableStateFlow(prefs.getBoolean(KEY_KILL_SWITCH, false))
+    val killSwitch: StateFlow<Boolean> = _killSwitch.asStateFlow()
+    fun setKillSwitch(enabled: Boolean) {
+        _killSwitch.value = enabled
+        prefs.edit().putBoolean(KEY_KILL_SWITCH, enabled).apply()
+    }
+
+    private val _mux = MutableStateFlow(prefs.getBoolean(KEY_MUX, false))
+    val mux: StateFlow<Boolean> = _mux.asStateFlow()
+    fun setMux(enabled: Boolean) {
+        _mux.value = enabled
+        prefs.edit().putBoolean(KEY_MUX, enabled).apply()
+    }
+
+    private val _muxConcurrency = MutableStateFlow(prefs.getInt(KEY_MUX_CONCURRENCY, 8))
+    val muxConcurrency: StateFlow<Int> = _muxConcurrency.asStateFlow()
+    fun setMuxConcurrency(value: Int) {
+        val v = value.coerceIn(1, 128)
+        _muxConcurrency.value = v
+        prefs.edit().putInt(KEY_MUX_CONCURRENCY, v).apply()
+    }
+
+    private val _globeStyle = MutableStateFlow(prefs.getString(KEY_GLOBE_STYLE, "filled") ?: "filled")
+    val globeStyle: StateFlow<String> = _globeStyle.asStateFlow()
+    fun setGlobeStyle(style: String) {
+        _globeStyle.value = style
+        prefs.edit().putString(KEY_GLOBE_STYLE, style).apply()
+    }
+
     private val _sniffTypes = MutableStateFlow(loadSniffTypes())
     val sniffTypes: StateFlow<Set<String>> = _sniffTypes.asStateFlow()
 
@@ -366,6 +395,10 @@ class ConfigStore private constructor(context: Context) {
         private const val KEY_FRAG_INTERVAL = "fragment_interval"
         private const val KEY_SPLIT = "split_routing_enabled"
         private const val KEY_SNIFFING = "sniffing_enabled"
+        private const val KEY_KILL_SWITCH = "kill_switch_enabled"
+        private const val KEY_MUX = "mux_enabled"
+        private const val KEY_MUX_CONCURRENCY = "mux_concurrency"
+        private const val KEY_GLOBE_STYLE = "globe_style"
         private const val KEY_SNIFF_TYPES = "sniffing_types"
         private const val KEY_AUTOSELECT = "auto_select_fastest"
         private const val KEY_SORT_SPEED = "sort_by_speed"

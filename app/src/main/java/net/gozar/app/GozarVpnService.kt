@@ -21,6 +21,7 @@ import java.io.File
 class GozarVpnService : VpnService() {
 
     private var tunFd: ParcelFileDescriptor? = null
+    private var blockFd: ParcelFileDescriptor? = null
     private val scope = CoroutineScope(Dispatchers.IO)
     private var pollJob: Job? = null
     private var configName: String = "VPN"
@@ -39,6 +40,7 @@ class GozarVpnService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
+                runCatching { blockFd?.close() }; blockFd = null
                 die(null)
                 return START_NOT_STICKY
             }
@@ -166,6 +168,11 @@ class GozarVpnService : VpnService() {
 
     private fun die(error: String?) {
         if (tearingDown) return
+        val killOn = runCatching { ConfigStore.get(applicationContext).killSwitch.value }.getOrDefault(false)
+        if (error != null && killOn) {
+            enterKillSwitch(error)
+            return
+        }
         tearingDown = true
         pollJob?.cancel()
         pollJob = null
@@ -181,7 +188,27 @@ class GozarVpnService : VpnService() {
         }
     }
 
+    private fun enterKillSwitch(reason: String) {
+        pollJob?.cancel(); pollJob = null
+        runCatching { Gozarcore.stop() }
+        runCatching { tunFd?.close() }; tunFd = null
+        val b = Builder()
+            .setSession("GozarNet (blocked)")
+            .setMtu(1500)
+            .addAddress("10.10.0.2", 32)
+            .addRoute("0.0.0.0", 0)
+            .addRoute("::", 0)
+        applyPerApp(b)
+        blockFd = runCatching { b.establish() }.getOrNull()
+        VpnBridge.sendError(applicationContext, reason)
+        runCatching {
+            val nm = getSystemService(NotificationManager::class.java)
+            nm?.notify(NOTIF_ID, buildBlockedNotification())
+        }
+    }
+
     override fun onDestroy() {
+        runCatching { blockFd?.close() }; blockFd = null
         runCatching { getSystemService(NotificationManager::class.java)?.cancel(NOTIF_ID) }
         super.onDestroy()
     }
@@ -204,6 +231,35 @@ class GozarVpnService : VpnService() {
         return Notification.Builder(this, CHANNEL_ID)
             .setContentTitle(configName)
             .setContentText(speedLine)
+            .setSmallIcon(android.R.drawable.ic_lock_lock)
+            .setContentIntent(pi)
+            .addAction(
+                Notification.Action.Builder(
+                    android.R.drawable.ic_menu_close_clear_cancel, stopLabel, stopPi
+                ).build()
+            )
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .build()
+    }
+
+    private fun buildBlockedNotification(): Notification {
+        val nm = getSystemService(NotificationManager::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            nm.createNotificationChannel(
+                NotificationChannel(CHANNEL_ID, "GozarNet", NotificationManager.IMPORTANCE_LOW)
+            )
+        }
+        val pi = PendingIntent.getActivity(
+            this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE
+        )
+        val stopPi = PendingIntent.getService(
+            this, 1, Intent(this, GozarVpnService::class.java).setAction(ACTION_STOP),
+            PendingIntent.FLAG_IMMUTABLE
+        )
+        return Notification.Builder(this, CHANNEL_ID)
+            .setContentTitle("Kill switch active")
+            .setContentText("Connection lost — internet is blocked to prevent leaks")
             .setSmallIcon(android.R.drawable.ic_lock_lock)
             .setContentIntent(pi)
             .addAction(

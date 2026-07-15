@@ -13,10 +13,12 @@ object ConfigBuilder {
         sniffTypes: Set<String> = setOf("http", "tls", "quic"),
         fragmentPackets: String = "tlshello",
         fragmentLength: String = "10-20",
-        fragmentInterval: String = "10-20"
+        fragmentInterval: String = "10-20",
+        mux: Boolean = false,
+        muxConcurrency: Int = 8
     ): String {
         val root = JSONObject()
-        root.put("log", JSONObject().put("loglevel", if (config.locked) "none" else "warning"))
+        root.put("log", JSONObject().put("loglevel", "warning"))
 
         root.put("stats", JSONObject())
         root.put("policy", JSONObject().put("system", JSONObject()
@@ -45,6 +47,11 @@ object ConfigBuilder {
         if (fragment) {
             proxyOut.optJSONObject("streamSettings")
                 ?.put("sockopt", JSONObject().put("dialerProxy", "fragment"))
+        }
+        if (mux) {
+            proxyOut.put("mux", JSONObject()
+                .put("enabled", true)
+                .put("concurrency", muxConcurrency.coerceIn(1, 128)))
         }
 
         val outbounds = JSONArray().put(proxyOut)

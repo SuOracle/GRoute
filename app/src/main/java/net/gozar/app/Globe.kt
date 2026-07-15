@@ -91,7 +91,7 @@ data class IpLocation(
     val lon: Double
 )
 
-private val TehranFallback = IpLocation("\u2014", "Tehran", "Iran", "IR", 35.6892, 51.3890)
+internal val TehranFallback = IpLocation("\u2014", "Tehran", "Iran", "IR", 35.6892, 51.3890)
 
 object LocationFetcher {
     suspend fun fetch(throughProxy: Boolean): IpLocation? = withContext(Dispatchers.IO) {
@@ -191,28 +191,6 @@ private fun globeFrameRateModifier(): Modifier {
             this
         }
     } else Modifier
-}
-
-private class GlobeBuffers(val bs: Int) {
-    val lut = GlobeLut(bs)
-    val px = IntArray(bs * bs)
-    val bmp = arrayOf(
-        android.graphics.Bitmap.createBitmap(bs, bs, android.graphics.Bitmap.Config.ARGB_8888),
-        android.graphics.Bitmap.createBitmap(bs, bs, android.graphics.Bitmap.Config.ARGB_8888)
-    )
-    val img = arrayOf(bmp[0].asImageBitmap(), bmp[1].asImageBitmap())
-    var front = 0
-}
-
-private object GlobeCache {
-    @Volatile private var cached: GlobeBuffers? = null
-    fun get(bs: Int): GlobeBuffers {
-        cached?.let { if (it.bs == bs) return it }
-        val fresh = GlobeBuffers(bs)
-        cached = fresh
-        return fresh
-    }
-    fun peek(bs: Int): GlobeBuffers? = cached?.takeIf { it.bs == bs }
 }
 
 private const val GLOBE_RENDER_MAX = 512
@@ -396,7 +374,7 @@ private suspend fun renderGlobeParallel(
     }.joinAll()
 }
 
-private fun project(lat: Double, lon: Double, spin: Float, tilt: Float, cx: Float, cy: Float, r: Float): FloatArray {
+internal fun project(lat: Double, lon: Double, spin: Float, tilt: Float, cx: Float, cy: Float, r: Float): FloatArray {
     val la = Math.toRadians(lat); val lo = Math.toRadians(lon)
     val ax = cos(la) * sin(lo); val ay = sin(la); val az = cos(la) * cos(lo)
     val cs = cos(spin.toDouble()); val sn = sin(spin.toDouble())
@@ -408,7 +386,7 @@ private fun project(lat: Double, lon: Double, spin: Float, tilt: Float, cx: Floa
     return floatArrayOf((cx + r * rx).toFloat(), (cy - r * ty).toFloat(), tz.toFloat())
 }
 
-private fun nearestAngle(target: Float, current: Float): Float {
+internal fun nearestAngle(target: Float, current: Float): Float {
     var t = target
     val twoPi = (2 * PI).toFloat()
     while (t - current > PI) t -= twoPi
@@ -434,7 +412,9 @@ fun EarthSection(modifier: Modifier = Modifier) {
     val scope = rememberCoroutineScope()
 
     var loc by remember { mutableStateOf(TehranFallback) }
-    LaunchedEffect(conn) {
+    val globeContext = androidx.compose.ui.platform.LocalContext.current
+    val killSwitchOn by ConfigStore.get(globeContext).killSwitch.collectAsState()
+    LaunchedEffect(conn, killSwitchOn) {
         when (conn) {
             Connection.CONNECTED -> {
                 delay(1200)
@@ -448,6 +428,10 @@ fun EarthSection(modifier: Modifier = Modifier) {
                 }
             }
             Connection.DISCONNECTED -> {
+                if (killSwitchOn) {
+                    loc = TehranFallback
+                    return@LaunchedEffect
+                }
                 repeat(3) {
                     val l = LocationFetcher.fetch(throughProxy = false)
                     if (l != null) {
@@ -504,38 +488,45 @@ fun EarthSection(modifier: Modifier = Modifier) {
             val popupHpx = with(density) { 58.dp.toPx() }
 
             val bs = remember(sidePx) { (sidePx.roundToInt() * GLOBE_RENDER_SCALE / 100).coerceIn(96, GLOBE_RENDER_MAX) }
-            var buffers by remember(bs) { mutableStateOf(GlobeCache.peek(bs)) }
-            val lut = buffers?.lut
+            var lut by remember(bs) { mutableStateOf<GlobeLut?>(null) }
+            val px = remember(bs) { IntArray(bs * bs) }
+            val bmp = remember(bs) {
+                arrayOf(
+                    android.graphics.Bitmap.createBitmap(bs, bs, android.graphics.Bitmap.Config.ARGB_8888),
+                    android.graphics.Bitmap.createBitmap(bs, bs, android.graphics.Bitmap.Config.ARGB_8888)
+                )
+            }
+            val img = remember(bs) { arrayOf(bmp[0].asImageBitmap(), bmp[1].asImageBitmap()) }
 
-            var frameImage by remember(bs) { mutableStateOf(buffers?.let { it.img[it.front] }) }
+            var frameImage by remember(bs) { mutableStateOf(img[0]) }
             var renderedSpin by remember { mutableStateOf(Float.NaN) }
             var renderedTilt by remember { mutableStateOf(0f) }
+            var front = remember(bs) { 0 }
 
             LaunchedEffect(Unit) {
                 withContext(Dispatchers.Default) { EarthMask.data }
             }
 
             LaunchedEffect(bs) {
-                if (buffers == null) {
-                    val b = withContext(Dispatchers.Default) { GlobeCache.get(bs) }
-                    buffers = b
-                    if (frameImage == null) frameImage = b.img[b.front]
+                delay(350)
+                lut = withContext(Dispatchers.Default) {
+                    EarthMask.data
+                    GlobeLut(bs)
                 }
             }
 
             LaunchedEffect(bs, lut) {
                 val l = lut ?: return@LaunchedEffect
-                val b = buffers ?: return@LaunchedEffect
                 snapshotFlow { spinY.value to tiltX.value }
                     .conflate()
                     .collect { (s, t) ->
-                        val back = 1 - b.front
+                        val back = 1 - front
                         withContext(Dispatchers.Default) {
-                            renderGlobeParallel(b.px, l, s, t, true)
-                            b.bmp[back].setPixels(b.px, 0, bs, 0, 0, bs, bs)
+                            renderGlobeParallel(px, l, s, t, true)
+                            bmp[back].setPixels(px, 0, bs, 0, 0, bs, bs)
                         }
-                        b.front = back
-                        frameImage = b.img[back]
+                        front = back
+                        frameImage = img[back]
                         renderedSpin = s; renderedTilt = t
                     }
             }
@@ -579,16 +570,13 @@ fun EarthSection(modifier: Modifier = Modifier) {
                     )
                 }
                 Canvas(Modifier.fillMaxSize()) {
-                    val fi = frameImage
-                    if (fi != null) {
-                        drawImage(
-                            image = fi,
-                            srcOffset = IntOffset.Zero,
-                            srcSize = IntSize(bs, bs),
-                            dstOffset = IntOffset.Zero,
-                            dstSize = IntSize(sidePx.roundToInt(), sidePx.roundToInt())
-                        )
-                    }
+                    drawImage(
+                        image = frameImage,
+                        srcOffset = IntOffset.Zero,
+                        srcSize = IntSize(bs, bs),
+                        dstOffset = IntOffset.Zero,
+                        dstSize = IntSize(sidePx.roundToInt(), sidePx.roundToInt())
+                    )
                 }
 
                 Canvas(Modifier.fillMaxSize()) {
@@ -728,7 +716,7 @@ fun EarthSection(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun rememberTick(running: Boolean): Long {
+internal fun rememberTick(running: Boolean): Long {
     var now by remember { mutableStateOf(System.currentTimeMillis()) }
     LaunchedEffect(running) {
         while (running) {
@@ -739,7 +727,7 @@ private fun rememberTick(running: Boolean): Long {
     return now
 }
 
-private fun fmtHMS(totalSec: Long): String {
+internal fun fmtHMS(totalSec: Long): String {
     val h = totalSec / 3600
     val m = (totalSec % 3600) / 60
     val s = totalSec % 60

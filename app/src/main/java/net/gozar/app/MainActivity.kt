@@ -100,6 +100,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.ArrowDownward
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.Bolt
@@ -383,17 +384,16 @@ private fun WelcomeScreen(onDone: () -> Unit) {
                 text = t("welcome_tagline"),
                 style = MaterialTheme.typography.titleMedium,
                 fontSize = 16.sp,
+                lineHeight = 22.sp,
                 fontWeight = FontWeight.Bold,
                 fontFamily = welcomeFont,
                 color = Color(0xFFEDEFF3),
                 textAlign = TextAlign.Center,
-                maxLines = 1,
-                softWrap = false,
                 overflow = TextOverflow.Visible,
                 modifier = Modifier
                     .fillMaxWidth()
                     .offset(y = (-40).dp)
-                    .padding(start = 8.dp, end = 8.dp)
+                    .padding(horizontal = 24.dp)
                     .graphicsLayer {
                         alpha = taglineAlpha
                         translationY = taglineShift
@@ -565,7 +565,7 @@ class MainActivity : ComponentActivity() {
 
     private fun proceedConnect(config: ProxyConfig) {
         if (VpnState.state.value == Connection.CONNECTED) return
-        val json = ConfigBuilder.build(config, store.fragment.value, store.splitRouting.value, store.sniffing.value, store.sniffTypes.value)
+        val json = ConfigBuilder.build(config, store.fragment.value, store.splitRouting.value, store.sniffing.value, store.sniffTypes.value, mux = store.mux.value, muxConcurrency = store.muxConcurrency.value)
         VpnState.setConnecting(config.id)
         val intent = VpnService.prepare(this)
         if (intent != null) { afterPermission = { startTunnel(json, config.name) }; vpnPermission.launch(intent) }
@@ -662,6 +662,7 @@ private fun GozarApp(
     var logsDetail by remember { mutableStateOf(false) }
     var stabilityDetail by remember { mutableStateOf(false) }
     var aboutDetail by remember { mutableStateOf(false) }
+    var themeDetail by remember { mutableStateOf(false) }
     var cleanIpDetail by remember { mutableStateOf(false) }
     var donationDetail by remember { mutableStateOf(false) }
     var exportConfigs by remember { mutableStateOf<List<ProxyConfig>?>(null) }
@@ -777,7 +778,7 @@ private fun GozarApp(
 
     val page = pagerState.currentPage
     val onSettingsTab = page == 1
-    val subScreenOpen = (page == 0 && (showPicker || showManual || exportConfigs != null)) || (onSettingsTab && (usageDetail || perAppDetail || logsDetail || stabilityDetail || aboutDetail || cleanIpDetail || donationDetail))
+    val subScreenOpen = (page == 0 && (showPicker || showManual || exportConfigs != null)) || (onSettingsTab && (usageDetail || perAppDetail || logsDetail || stabilityDetail || aboutDetail || cleanIpDetail || donationDetail || themeDetail))
 
     val screenKey = when {
         page == 0 && exportConfigs != null -> "export"
@@ -789,6 +790,7 @@ private fun GozarApp(
         onSettingsTab && logsDetail -> "logs"
         onSettingsTab && stabilityDetail -> "stability"
         onSettingsTab && aboutDetail -> "about"
+        onSettingsTab && themeDetail -> "theme"
         onSettingsTab && cleanIpDetail -> "cleanip"
         onSettingsTab && donationDetail -> "donation"
         else -> "settings"
@@ -804,6 +806,7 @@ private fun GozarApp(
             logsDetail -> logsDetail = false
             stabilityDetail -> stabilityDetail = false
             aboutDetail -> aboutDetail = false
+            themeDetail -> themeDetail = false
             cleanIpDetail -> cleanIpDetail = false
             donationDetail -> donationDetail = false
             onSettingsTab -> scope.launch { pagerState.animateScrollToPage(0) }
@@ -855,6 +858,7 @@ private fun GozarApp(
                                 "logs" -> t("xray_logs")
                                 "stability" -> t("stab_title")
                                 "about" -> t("about")
+                                "theme" -> t("theme_settings")
                                 "cleanip" -> t("scan_title")
                                 "donation" -> if (LocalLang.current == Lang.FA) "حمایت از ما" else "Support Us"
                                 else -> t("settings")
@@ -872,6 +876,7 @@ private fun GozarApp(
                         "logs" -> BounceIconButton(onClick = { logsDetail = false }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
                         "stability" -> BounceIconButton(onClick = { stabilityDetail = false }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
                         "about" -> BounceIconButton(onClick = { aboutDetail = false }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
+                        "theme" -> BounceIconButton(onClick = { themeDetail = false }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
                         "cleanip" -> BounceIconButton(onClick = { cleanIpDetail = false }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
                         "donation" -> BounceIconButton(onClick = { donationDetail = false }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back") }
                     }
@@ -932,6 +937,7 @@ private fun GozarApp(
                         logsDetail = false
                         stabilityDetail = false
                         aboutDetail = false
+                        themeDetail = false
                         cleanIpDetail = false
                         donationDetail = false
                         scope.launch { pagerState.animateScrollToPage(1) }
@@ -1014,6 +1020,7 @@ private fun GozarApp(
                     logsDetail -> "logs"
                     stabilityDetail -> "stability"
                     aboutDetail -> "about"
+                    themeDetail -> "theme"
                     cleanIpDetail -> "cleanip"
                     donationDetail -> "donation"
                     else -> "settings"
@@ -1037,6 +1044,7 @@ private fun GozarApp(
                         "logs" -> LogsScreen(store = store)
                         "stability" -> StabilityTestScreen(store = store)
                         "about" -> AboutScreen()
+                        "theme" -> ThemeSettingsScreen(store = store)
                         "cleanip" -> CleanIpScreen()
                         "donation" -> DonationScreen()
                         else -> SettingsScreen(
@@ -1047,6 +1055,7 @@ private fun GozarApp(
                             onOpenLogs = { logsDetail = true },
                             onOpenStability = { stabilityDetail = true },
                             onOpenAbout = { aboutDetail = true },
+                            onOpenTheme = { themeDetail = true },
                             onOpenCleanIp = { cleanIpDetail = true },
                             onOpenDonation = { donationDetail = true }
                         )
@@ -1228,7 +1237,12 @@ private fun ConnectionScreen(
                     }
                 }
 
-                EarthSection(Modifier.weight(1f).fillMaxWidth())
+                val globeStyle by store.globeStyle.collectAsState()
+                if (globeStyle == "dots") {
+                    DotGlobeSection(Modifier.weight(1f).fillMaxWidth())
+                } else {
+                    EarthSection(Modifier.weight(1f).fillMaxWidth())
+                }
             }
         }
     }
@@ -2065,6 +2079,7 @@ private fun SettingsScreen(
     onOpenAbout: () -> Unit,
     onOpenCleanIp: () -> Unit,
     onOpenDonation: () -> Unit,
+    onOpenTheme: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val t = stringsFn()
@@ -2073,6 +2088,11 @@ private fun SettingsScreen(
     val splitRouting by store.splitRouting.collectAsState()
     val sniffing by store.sniffing.collectAsState()
     val sniffTypes by store.sniffTypes.collectAsState()
+    val killSwitch by store.killSwitch.collectAsState()
+    val mux by store.mux.collectAsState()
+    val muxConcurrency by store.muxConcurrency.collectAsState()
+    val globeStyle by store.globeStyle.collectAsState()
+    val settingsContext = androidx.compose.ui.platform.LocalContext.current
     val usage by UsageStore.usage.collectAsState()
     val allTime = remember(usage) { UsageStore.totalAll(usage) }
     val curLang by store.lang.collectAsState()
@@ -2140,6 +2160,27 @@ private fun SettingsScreen(
             checked = splitRouting,
             onCheckedChange = { store.setSplitRouting(it) }
         )
+        val perAppMode by store.perAppMode.collectAsState()
+        val perAppList by store.perAppList.collectAsState()
+        Card(
+            modifier = Modifier.fillMaxWidth()
+                .clip(RoundedCornerShape(20.dp))
+                .clickable { onOpenPerApp() },
+            shape = RoundedCornerShape(20.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
+        ) {
+            Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(t("per_app"), style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        perAppSummary(perAppMode, perAppList.size, lang),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Icon(Icons.Filled.ChevronRight, contentDescription = null)
+            }
+        }
         SettingRow(
             title = t("fragment_title"),
             subtitle = t("fragment_sub"),
@@ -2167,23 +2208,88 @@ private fun SettingsScreen(
             }
         }
 
-        val perAppMode by store.perAppMode.collectAsState()
-        val perAppList by store.perAppList.collectAsState()
+        SettingRow(
+            title = t("mux_title"),
+            subtitle = t("mux_sub"),
+            checked = mux,
+            onCheckedChange = { store.setMux(it) }
+        )
+        AnimatedVisibility(visible = mux) {
+            Row(
+                Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(t("mux_concurrency"), style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f))
+                IconButton(onClick = { store.setMuxConcurrency(muxConcurrency - 1) }) {
+                    Icon(Icons.Filled.Remove, contentDescription = "-")
+                }
+                Text("$muxConcurrency", style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.width(36.dp), textAlign = TextAlign.Center)
+                IconButton(onClick = { store.setMuxConcurrency(muxConcurrency + 1) }) {
+                    Icon(Icons.Filled.Add, contentDescription = "+")
+                }
+            }
+        }
+
+        SettingRow(
+            title = t("kill_switch_title"),
+            subtitle = t("kill_switch_sub"),
+            checked = killSwitch,
+            onCheckedChange = { store.setKillSwitch(it) }
+        )
+        AnimatedVisibility(visible = killSwitch) {
+            Card(
+                modifier = Modifier.fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .clickable {
+                        runCatching {
+                            settingsContext.startActivity(
+                                Intent("android.net.vpn.SETTINGS")
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            )
+                        }.onFailure {
+                            runCatching {
+                                settingsContext.startActivity(
+                                    Intent(android.provider.Settings.ACTION_VPN_SETTINGS)
+                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                )
+                            }
+                        }
+                    },
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                )
+            ) {
+                Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Filled.Lock, contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(t("always_on_title"), style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold)
+                        Text(t("always_on_sub"), style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Icon(Icons.Filled.ChevronRight, contentDescription = null)
+                }
+            }
+        }
+
+        Text(t("appearance"), style = MaterialTheme.typography.titleMedium)
         Card(
             modifier = Modifier.fillMaxWidth()
                 .clip(RoundedCornerShape(20.dp))
-                .clickable { onOpenPerApp() },
+                .clickable { onOpenTheme() },
             shape = RoundedCornerShape(20.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)
         ) {
             Row(Modifier.fillMaxWidth().padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text(t("per_app"), style = MaterialTheme.typography.bodyLarge)
-                    Text(
-                        perAppSummary(perAppMode, perAppList.size, lang),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Text(t("theme_settings"), style = MaterialTheme.typography.bodyLarge)
+                    Text(t("theme_settings_sub"), style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Icon(Icons.Filled.ChevronRight, contentDescription = null)
             }
@@ -2323,6 +2429,91 @@ private val TelegramIcon: ImageVector =
         )
         build()
     }
+
+@Composable
+private fun ThemeSettingsScreen(store: ConfigStore, modifier: Modifier = Modifier) {
+    val t = stringsFn()
+    val themeMode by store.themeMode.collectAsState()
+    val globeStyle by store.globeStyle.collectAsState()
+
+    Column(
+        modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp)
+    ) {
+        Text(t("theme_mode"), style = MaterialTheme.typography.titleMedium)
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            ThemeModeRow(
+                icon = Icons.Filled.LightMode,
+                label = t("theme_light"),
+                selected = themeMode == ThemeMode.LIGHT,
+                onClick = { store.setThemeMode(ThemeMode.LIGHT) }
+            )
+            ThemeModeRow(
+                icon = Icons.Filled.DarkMode,
+                label = t("theme_dark"),
+                selected = themeMode == ThemeMode.DARK,
+                onClick = { store.setThemeMode(ThemeMode.DARK) }
+            )
+            ThemeModeRow(
+                icon = Icons.Filled.Contrast,
+                label = t("theme_amoled"),
+                selected = themeMode == ThemeMode.AMOLED,
+                onClick = { store.setThemeMode(ThemeMode.AMOLED) }
+            )
+            ThemeModeRow(
+                icon = Icons.Filled.Contrast,
+                label = t("theme_system"),
+                selected = themeMode == ThemeMode.SYSTEM,
+                onClick = { store.setThemeMode(ThemeMode.SYSTEM) }
+            )
+        }
+
+        Text(t("globe_style_title"), style = MaterialTheme.typography.titleMedium)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            GlobeStyleOption(
+                label = t("globe_style_filled"),
+                selected = globeStyle == "filled",
+                onClick = { store.setGlobeStyle("filled") },
+                modifier = Modifier.weight(1f)
+            )
+            GlobeStyleOption(
+                label = t("globe_style_dots"),
+                selected = globeStyle == "dots",
+                onClick = { store.setGlobeStyle("dots") },
+                modifier = Modifier.weight(1f)
+            )
+        }
+    }
+}
+
+@Composable
+private fun ThemeModeRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    val border = if (selected) MaterialTheme.colorScheme.primary
+    else MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
+    Card(
+        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).clickable { onClick() },
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(if (selected) 2.dp else 1.dp, border),
+        colors = CardDefaults.cardColors(
+            containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+            else MaterialTheme.colorScheme.surface
+        )
+    ) {
+        Row(Modifier.fillMaxWidth().padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(icon, contentDescription = null,
+                tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(22.dp))
+            Spacer(Modifier.width(12.dp))
+            Text(label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+            if (selected) Icon(Icons.Filled.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+        }
+    }
+}
 
 @Composable
 private fun AboutScreen(modifier: Modifier = Modifier) {
@@ -3528,7 +3719,37 @@ private fun SettingRow(
             Text(subtitle, style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        Spacer(Modifier.width(16.dp))
         Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
+}
+
+@Composable
+private fun GlobeStyleOption(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val border = if (selected) MaterialTheme.colorScheme.primary
+    else MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
+    val bg = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+    else Color.Transparent
+    Box(
+        modifier
+            .clip(RoundedCornerShape(14.dp))
+            .background(bg)
+            .border(BorderStroke(if (selected) 1.5.dp else 1.dp, border), RoundedCornerShape(14.dp))
+            .clickable { onClick() }
+            .padding(vertical = 12.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+        )
     }
 }
 
