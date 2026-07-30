@@ -44,6 +44,8 @@ jobs:
       - name: Create secrets.properties
         run: |
           echo "DEFAULT_SUB_URL=${{ secrets.DEFAULT_SUB_URL }}" >> secrets.properties
+          echo "API_BASE_URL=${{ secrets.API_BASE_URL }}" >> secrets.properties
+          echo "UPDATE_REPO=${{ secrets.UPDATE_REPO }}" >> secrets.properties
 
       - name: Decode keystore
         run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/release.jks"
@@ -62,7 +64,7 @@ jobs:
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: GRoute-release
+          name: CubeVPN-release
           path: app/build/outputs/apk/release/*.apk
           if-no-files-found: error
 
