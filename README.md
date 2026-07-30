@@ -1,17 +1,13 @@
-<p align="center">
-  <img src="docs/images/GRouteTransparentBlack.png" width="220" alt="GRoute">
-</p>
-
-# GRoute (جی‌روت)
+# CubeVPN
 
 [فارسی](README-fa.md)
 
-A lightweight Android VPN client built on [Xray-core](https://github.com/XTLS/Xray-core) for bypassing internet restrictions, with a clean Jetpack Compose UI in English and Persian.
-
-*GRoute — a tool to pass through restrictions.*
+A lightweight Android VPN client built on [Xray-core](https://github.com/XTLS/Xray-core) for bypassing internet restrictions, with a custom black/red Jetpack Compose UI in English and Persian, and account sign-in through the [@cubevvpn_bot](https://t.me/cubevvpn_bot) Telegram bot.
 
 ## Features
 
+- **Sign-in via Telegram** — enter your phone number or Telegram ID and verify with a one-time code sent by [@cubevvpn_bot](https://t.me/cubevvpn_bot); no password to remember.
+- **Purchased services** — after sign-in the app pulls your active plan(s) automatically, each with its own data quota, expiry, and server list.
 - **Multiple protocols** — VLESS, VMess, Trojan, and Shadowsocks.
 - **Modern transports** — REALITY, TLS, WebSocket, gRPC, HTTPUpgrade, XHTTP, and plain TCP.
 - **Cloudflare WARP** — register and add a WARP configuration in one tap.
@@ -27,32 +23,13 @@ A lightweight Android VPN client built on [Xray-core](https://github.com/XTLS/Xr
 - **Xray logs** — view the engine's runtime logs inside the app.
 - **Data-usage history** — live session speed and total, plus hourly, daily, and custom date ranges.
 - **Bilingual** — full English and Persian UI with right-to-left support.
-- **Themes** — light, dark, and pure-black AMOLED.
-
-<details>
-<summary><b>App screenshots</b></summary>
-
-<p align="center">
-  <img src="docs/images/Artboard%203.png" width="720" alt="GRoute features">
-</p>
-
-</details>
-
-## Download
-
-Grab the latest APK from the [Releases](https://github.com/SuOracle/GNet/releases) page and install it on your device. Because GRoute is distributed outside the Play Store, you'll need to allow installation from your browser or file manager the first time. Google Play Protect may show a caution prompt on sideloaded apps; this is normal for direct APK installs and fades as install volume grows on a stable signing key.
-
-To update later, install the newer APK over the existing one — as long as it's signed with the same key, your servers and settings are preserved. GRoute can also check for new releases from the **About** screen.
+- **Themes** — light, dark, and pure-black AMOLED, all built around the CubeVPN red accent.
 
 ## How to use
 
-**1. Add servers.** On the main screen, tap the server card to open the server list. You can add servers three ways:
+**1. Sign in.** On first launch, enter the phone number or Telegram ID you use with [@cubevvpn_bot](https://t.me/cubevvpn_bot) and tap **Get code**. Open Telegram to read the one-time code the bot sends you, enter it, and you're in — your purchased service(s) and servers load automatically.
 
-- Paste one or more config links (`vless://`, `vmess://`, `trojan://`, `ss://`) — one per line — and tap **Add**.
-- Paste a **subscription link** (starting with `http`/`https`) to import every server it contains.
-- Use the **+** menu to paste from the clipboard, add a server manually field by field, or register a **WARP** configuration.
-
-**2. Pick a server.** Tap any server to select it. Tap **Test all** to ping every server, then choose **Fastest first** from the sort menu to move the quickest to the top. The share icon on any server or subscription lets you copy or share it as a link.
+**2. Pick a server.** Tap the server card to open the server list, grouped by service. Tap **Test all** to ping every server, then choose **Fastest first** from the sort menu to move the quickest to the top.
 
 **3. Connect.** Go back to the main screen and tap **Connect**. The first time, Android asks for VPN permission (and, on Android 13+, notification permission) — allow both. Once connected you'll see live upload/download speed, and the notification shows the speed with a **Disconnect** button you can use without opening the app.
 
@@ -62,7 +39,7 @@ To update later, install the newer APK over the existing one — as long as it's
 - **Fragment (anti-DPI)** — helps slip past DPI, although modern DPI is increasingly able to recognize VPN traffic patterns.
 - **Sniffing** — routes by the domain detected from traffic instead of the raw IP; turn it on if a server won't connect correctly, and choose what to sniff (HTTP / TLS / QUIC).
 - **Per-app proxy** — choose exactly which apps use the VPN.
-- **Auto-refresh subscriptions** — set how often subscriptions update (off, hourly, or every few hours).
+- **Auto-refresh subscriptions** — set how often your services' server lists update (off, hourly, or every few hours).
 - **Language** — switch between English and Persian.
 - **Theme** — use the toggle in the top-right to cycle light / dark / AMOLED.
 
@@ -77,20 +54,36 @@ To update later, install the newer APK over the existing one — as long as it's
 
 **8. Troubleshoot.** Open **Xray logs** from Settings to see the engine's runtime output if a connection misbehaves, and **About** to check the bundled Xray-core version.
 
+**9. Sign out.** Settings → Account → **Sign out**.
+
 ## Tech stack
 
 Kotlin · Jetpack Compose · Material 3 · Xray-core (via a gomobile bridge) · minSdk 26 · targetSdk 36.
 
+## Backend
+
+The app is a pure client. Sign-in, OTP delivery, and the list of a user's
+purchased services/configs are served by a separate backend that talks to
+`@cubevvpn_bot` — see [`docs/api-contract.md`](docs/api-contract.md) for the
+exact HTTP contract the app expects, and set `API_BASE_URL` in
+`secrets.properties` to point the app at your deployment.
+
 ## Privacy
 
-GRoute has no accounts, analytics, advertising, or tracking. Server configurations and usage statistics stay on your device and are never transmitted. See the full policy in the **About** screen.
+CubeVPN's only account data is what's needed to sign you in (your phone
+number or Telegram ID) and deliver your purchased service's configs — see
+the full policy in the **About** screen. Server configurations and usage
+statistics stay on your device and are never transmitted elsewhere.
 
 ## Support
 
-Questions or issues? Reach the developer on Telegram at [@OracleVPNsupport](https://t.me/OracleVPNsupport).
+Questions or issues? Reach us on Telegram at [@cubevvpn_bot](https://t.me/cubevvpn_bot).
 
 ## License
 
-[GPL-3.0](LICENSE). Bundled Xray-core remains under its own MPL-2.0 license.
-
-Developed by Oracle VPN.
+This project is a derivative of [GRoute](https://github.com/SuOracle/GRoute),
+licensed under [GPL-3.0](LICENSE); that license still governs this codebase
+and applies to anyone who receives a build of this app (GPL-3.0 requires
+offering them the corresponding source on request — it does not require
+publishing this repository publicly). Bundled Xray-core remains under its
+own MPL-2.0 license.

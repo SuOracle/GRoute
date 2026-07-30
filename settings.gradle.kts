@@ -22,5 +22,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "GozarNet"
+rootProject.name = "CubeVPN"
 include(":app")

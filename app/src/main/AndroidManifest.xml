@@ -10,7 +10,7 @@
         tools:ignore="QueryAllPackagesPermission" />
 
     <application
-        android:name=".GozarApplication"
+        android:name=".CubeVpnApplication"
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
@@ -19,14 +19,14 @@
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@style/Theme.GozarNet"
+        android:theme="@style/Theme.CubeVpn"
         android:enableOnBackInvokedCallback="true">
         <activity
             android:name=".MainActivity"
             android:exported="true"
             android:configChanges="uiMode|orientation|screenSize|smallestScreenSize|keyboardHidden|screenLayout"
             android:label="@string/app_name"
-            android:theme="@style/Theme.GozarNet"
+            android:theme="@style/Theme.CubeVpn"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -58,7 +58,7 @@
             </intent-filter>
         </activity>
         <service
-            android:name=".GozarVpnService"
+            android:name=".CubeVpnService"
             android:permission="android.permission.BIND_VPN_SERVICE"
             android:foregroundServiceType="specialUse"
             android:process=":vpn"

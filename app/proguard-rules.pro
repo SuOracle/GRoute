@@ -6,7 +6,7 @@
 -keepclassmembers class gozarcore.** { *; }
 
 # Gson/JSON config models are built by reflection — keep their fields
--keepclassmembers class net.gozar.app.** {
+-keepclassmembers class net.cubevpn.app.** {
     <fields>;
 }
 
