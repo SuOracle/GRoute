@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  GozarNet fetches user-supplied subscription / config endpoints, and in the regions
+  CubeVPN fetches user-supplied subscription / config endpoints, and in the regions
   this app targets many of those are plain HTTP. Android 9+ (API 28+) blocks cleartext
   by default, which is why the bundled default subscription failed on some phones with:
       "Cleartext HTTP traffic to <host> not permitted"

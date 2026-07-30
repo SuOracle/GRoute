@@ -32,7 +32,7 @@ val secrets = Properties().apply {
 }
 
 android {
-    namespace = "net.gozar.app"
+    namespace = "net.cubevpn.app"
     compileSdk {
         version = release(36) {
             minorApiLevel = 1
@@ -40,7 +40,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "net.gozar.app"
+        applicationId = "net.cubevpn.app"
         minSdk = 26
         targetSdk = 36
         versionCode = 4
@@ -49,6 +49,10 @@ android {
         buildConfigField("String", "DEFAULT_SUB_URL", "\"${secrets.getProperty("DEFAULT_SUB_URL", "")}\"")
         buildConfigField("String", "DONATION_CARD_NUMBER", bcString(localProp("DONATION_CARD_NUMBER")))
         buildConfigField("String", "DONATION_CARD_HOLDER", bcString(localProp("DONATION_CARD_HOLDER")))
+        // Base URL of the CubeVPN account API (see docs/api-contract.md). Set in secrets.properties.
+        buildConfigField("String", "API_BASE_URL", bcString(secrets.getProperty("API_BASE_URL", "")))
+        // "owner/repo" for the About screen's update checker. Leave blank to disable.
+        buildConfigField("String", "UPDATE_REPO", bcString(secrets.getProperty("UPDATE_REPO", "")))
     }
 
     signingConfigs {
