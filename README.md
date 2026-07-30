@@ -66,7 +66,9 @@ The app is a pure client. Sign-in, OTP delivery, and the list of a user's
 purchased services/configs are served by a separate backend that talks to
 `@cubevvpn_bot` — see [`docs/api-contract.md`](docs/api-contract.md) for the
 exact HTTP contract the app expects, and set `API_BASE_URL` in
-`secrets.properties` to point the app at your deployment.
+`secrets.properties` to point the app at your deployment. A ready-to-use
+implementation of that contract for Faoxima-based panels lives in
+[`backend/`](backend).
 
 ## Privacy
 

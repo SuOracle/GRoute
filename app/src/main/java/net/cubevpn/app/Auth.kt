@@ -34,7 +34,7 @@ object AuthApi {
 
     suspend fun requestCode(identifier: String): AuthResult = withContext(Dispatchers.IO) {
         val body = JSONObject().put("identifier", identifier)
-        val res = postJson("/v1/auth/request-code", body, token = null)
+        val res = postJson("/api/requestcode.php", body, token = null)
         if (res == null) return@withContext AuthResult.Error("network", "Network error")
         if (res.optBoolean("ok", false)) {
             AuthResult.RequestCodeOk(res.optInt("cooldown_seconds", 60))
@@ -45,7 +45,7 @@ object AuthApi {
 
     suspend fun verifyCode(identifier: String, code: String): AuthResult = withContext(Dispatchers.IO) {
         val body = JSONObject().put("identifier", identifier).put("code", code)
-        val res = postJson("/v1/auth/verify-code", body, token = null)
+        val res = postJson("/api/verifycode.php", body, token = null)
         if (res == null) return@withContext AuthResult.Error("network", "Network error")
         if (res.optBoolean("ok", false)) {
             val token = res.optString("token")
@@ -68,7 +68,7 @@ object AuthApi {
     }
 
     suspend fun fetchAccount(token: String): AuthResult = withContext(Dispatchers.IO) {
-        val res = getJson("/v1/account/me", token)
+        val res = getJson("/api/accountme.php", token)
         if (res == null) return@withContext AuthResult.Error("network", "Network error")
         if (res.optBoolean("ok", false)) {
             val u = res.optJSONObject("user")
@@ -99,7 +99,7 @@ object AuthApi {
     }
 
     suspend fun logout(token: String) = withContext(Dispatchers.IO) {
-        runCatching { postJson("/v1/auth/logout", JSONObject(), token) }
+        runCatching { postJson("/api/logout.php", JSONObject(), token) }
     }
 
     private fun errorFrom(res: JSONObject): AuthResult.Error =
