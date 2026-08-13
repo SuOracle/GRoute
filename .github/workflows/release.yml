@@ -26,7 +26,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          submodules: recursive
           fetch-depth: 0
 
       - name: Set up JDK 17
@@ -43,6 +42,31 @@ jobs:
           sdkmanager --install "ndk;${NDK_VERSION}" "platforms;android-36" "build-tools;36.0.0" "cmake;3.22.1"
           echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Install strongSwan build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            autoconf automake libtool pkg-config gperf bison flex perl python3
+
+      - name: Generate strongSwan built sources
+        run: |
+          cd strongswan
+          ./autogen.sh
+          ./configure \
+            --disable-defaults \
+            --enable-monolithic \
+            --enable-static \
+            --enable-openssl \
+            --enable-ikev1 \
+            --enable-ikev2
+          make -C src/libstrongswan BUILT_SOURCES
+          echo "--- generated ---"
+          ls -l src/libstrongswan/asn1/oid.c src/libstrongswan/asn1/oid.h
+          ls -l src/libstrongswan/crypto/proposal/proposal_keywords_static.c
+
+      - name: Remove host config.h
+        run: rm -f strongswan/config.h
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
