@@ -5,6 +5,7 @@ import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
@@ -19,10 +20,28 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.absoluteOffset
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -57,6 +76,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.PI
 import kotlin.math.cos
@@ -277,6 +297,155 @@ private class LandPoints {
     }
 }
 
+internal val AppGreen: Color
+    @Composable get() =
+        if (MaterialTheme.colorScheme.background.luminance() < 0.5f) Color(0xFF4BF0A4)
+        else Color(0xFF0B8F53)
+
+@Composable
+internal fun IpLocatorContent(
+    l: IpLocation,
+    accent: Color,
+    liveColor: Color,
+    connected: Boolean,
+    pulse: Float,
+    scale: Float = 1f
+) {
+    val lang = LocalLang.current
+    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val primary = MaterialTheme.colorScheme.primary
+    val live by animateColorAsState(
+        targetValue = if (connected) AppGreen else if (dark) primary else accent,
+        animationSpec = tween(420, easing = FastOutSlowInEasing),
+        label = "ipLive"
+    )
+    val shellTint by animateColorAsState(
+        targetValue = if (connected) lerp(accent, AppGreen, 0.34f) else accent,
+        animationSpec = tween(420, easing = FastOutSlowInEasing),
+        label = "ipShellTint"
+    )
+    val mix by animateColorAsState(
+        targetValue = if (dark) Color.Black else Color.White,
+        animationSpec = tween(420, easing = FastOutSlowInEasing),
+        label = "ipMix"
+    )
+    val shellK by animateFloatAsState(
+        targetValue = if (dark) 0.915f else 0.88f,
+        animationSpec = tween(420, easing = FastOutSlowInEasing),
+        label = "ipShellK"
+    )
+    val shadowK by animateFloatAsState(
+        targetValue = if (dark) 0.84f else 0.66f,
+        animationSpec = tween(420, easing = FastOutSlowInEasing),
+        label = "ipShadowK"
+    )
+    val veil by animateFloatAsState(
+        targetValue = if (dark) 0.57f else 0.80f,
+        animationSpec = tween(420, easing = FastOutSlowInEasing),
+        label = "ipVeil"
+    )
+    val onShell by animateColorAsState(
+        targetValue = if (dark) Color.White else Color(0xFF121722),
+        animationSpec = tween(420, easing = FastOutSlowInEasing),
+        label = "ipOnShell"
+    )
+    val shell = lerp(shellTint, mix, shellK)
+    val shadow = lerp(shellTint, mix, shadowK)
+
+    Column(
+        Modifier
+            .then(flagBackdrop(l.countryCode))
+            .background(shell.copy(alpha = veil))
+            .background(
+                Brush.verticalGradient(
+                    0.00f to shadow.copy(alpha = 0.66f),
+                    0.45f to shadow.copy(alpha = 0.12f),
+                    1.00f to shadow.copy(alpha = 0.70f)
+                )
+            )
+            .background(
+                Brush.horizontalGradient(
+                    0.00f to shadow.copy(alpha = 0.62f),
+                    0.50f to shadow.copy(alpha = 0.09f),
+                    1.00f to shadow.copy(alpha = 0.56f)
+                )
+            )
+            .padding(
+                start = (5f * scale).dp,
+                end = (13f * scale).dp,
+                top = (7f * scale).dp,
+                bottom = (8f * scale).dp
+            )
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            IpLocatorDot(live, scale)
+            Text(
+                Strings.get(lang, if (connected) "ip_secured" else "ip_exposed"),
+                color = live,
+                fontFamily = if (lang == Lang.FA) VazirFont else LexendFont,
+                fontWeight = FontWeight.Bold,
+                fontSize = (10f * scale).sp,
+                lineHeight = (14f * scale).sp,
+                maxLines = 1
+            )
+        }
+        Text(
+            l.ip,
+            color = onShell,
+            fontFamily = LexendFont,
+            fontWeight = FontWeight.Bold,
+            fontSize = (13.5f * scale).sp,
+            lineHeight = (19f * scale).sp,
+            letterSpacing = 0.2.sp,
+            maxLines = 1,
+            modifier = Modifier.padding(start = (7f * scale).dp)
+        )
+        Text(
+            mixedText(l.city.ifBlank { l.country }),
+            color = onShell.copy(alpha = 0.82f),
+            fontFamily = LexendFont,
+            fontWeight = FontWeight.SemiBold,
+            fontSize = (9.5f * scale).sp,
+            lineHeight = (14f * scale).sp,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(top = (2f * scale).dp, start = (7f * scale).dp)
+        )
+    }
+}
+
+@Composable
+internal fun IpLocatorDot(color: Color, scale: Float = 1f) {
+    val transition = rememberInfiniteTransition(label = "ipDot")
+    val ripple by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(1700, easing = LinearEasing)),
+        label = "ipDotRipple"
+    )
+    Box(Modifier.size((17f * scale).dp), contentAlignment = Alignment.Center) {
+        Box(
+            Modifier
+                .size((17f * scale).dp)
+                .graphicsLayer {
+                    val sc = 0.40f + ripple * 0.60f
+                    scaleX = sc; scaleY = sc
+                    alpha = (1f - ripple) * 0.6f
+                }
+                .background(Brush.radialGradient(listOf(color, Color.Transparent)), CircleShape)
+        )
+        Box(
+            Modifier
+                .size((11.5f * scale).dp)
+                .background(
+                    Brush.radialGradient(listOf(color.copy(alpha = 0.40f), Color.Transparent)),
+                    CircleShape
+                )
+        )
+        Box(Modifier.size((6.2f * scale).dp).clip(CircleShape).background(color))
+    }
+}
+
 @Composable
 fun DotGlobeSection(modifier: Modifier = Modifier) {
     val conn by VpnState.state.collectAsState()
@@ -285,9 +454,47 @@ fun DotGlobeSection(modifier: Modifier = Modifier) {
     val lang = LocalLang.current
 
     val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f
-    val dotColor = if (isDark) Color(0xFF35D6FF) else Color(0xFF0E5AA6)
-    val gridColor = MaterialTheme.colorScheme.primary.copy(alpha = if (isDark) 0.16f else 0.24f)
-    val markerColor = if (isDark) Color(0xFF4BF0A4) else Color(0xFF0E9E55)
+    val rawPrimary = MaterialTheme.colorScheme.primary
+    val themeSpec = tween<Color>(520, easing = FastOutSlowInEasing)
+    val themePrimary by animateColorAsState(rawPrimary, themeSpec, label = "globePrimary")
+    val dotColor by animateColorAsState(
+        targetValue = if (isDark) rawPrimary else lerp(rawPrimary, Color.Black, 0.30f),
+        animationSpec = themeSpec,
+        label = "globeDot"
+    )
+    val gridColor by animateColorAsState(
+        targetValue = rawPrimary.copy(alpha = if (isDark) 0.16f else 0.24f),
+        animationSpec = themeSpec,
+        label = "globeGrid"
+    )
+    val markerColor by animateColorAsState(AppGreen, themeSpec, label = "globeMarker")
+    val sphereInner by animateColorAsState(
+        targetValue = if (isDark) Color(0xFF15314F) else Color(0xFFD2E4F7),
+        animationSpec = themeSpec,
+        label = "globeSphereInner"
+    )
+    val sphereMid by animateColorAsState(
+        targetValue = if (isDark) Color(0xFF0C1D33) else Color(0xFFA6C6E9),
+        animationSpec = themeSpec,
+        label = "globeSphereMid"
+    )
+    val sphereEdge by animateColorAsState(
+        targetValue = if (isDark) Color(0xFF070F1C) else Color(0xFF7FA3CE),
+        animationSpec = themeSpec,
+        label = "globeSphereEdge"
+    )
+    val popupBg by animateColorAsState(
+        targetValue = if (isDark) Color(0xFF0B1424).copy(alpha = 0.97f)
+        else Color(0xFFFFFFFF).copy(alpha = 0.97f),
+        animationSpec = themeSpec,
+        label = "globePopupBg"
+    )
+    val popupBorder by animateColorAsState(
+        targetValue = if (isDark) lerp(rawPrimary, Color.Black, 0.55f)
+        else lerp(rawPrimary, Color.White, 0.34f),
+        animationSpec = themeSpec,
+        label = "globePopupBorder"
+    )
 
     val land = remember { LandPoints() }
     val pointBuf = remember { FloatArray(land.bx.size * 2) }
@@ -303,15 +510,23 @@ fun DotGlobeSection(modifier: Modifier = Modifier) {
     var loc by remember { mutableStateOf(TehranFallback) }
     val dotGlobeContext = androidx.compose.ui.platform.LocalContext.current
     val killSwitchOn by ConfigStore.get(dotGlobeContext).killSwitch.collectAsState()
+    var homeIp by remember { mutableStateOf("") }
     LaunchedEffect(conn, killSwitchOn) {
         when (conn) {
-            Connection.CONNECTED -> loc = LocationFetcher.fetch(throughProxy = true) ?: TehranFallback
+            Connection.CONNECTED -> loc =
+                LocationFetcher.fetch(throughProxy = !IkeController.active) ?: TehranFallback
             Connection.DISCONNECTED -> {
                 loc = if (killSwitchOn) TehranFallback
                 else LocationFetcher.fetch(throughProxy = false) ?: TehranFallback
+                if (!killSwitchOn && loc.ip.isNotBlank() && loc.ip != "\u2014") homeIp = loc.ip
             }
             else -> { }
         }
+    }
+    val secured = when {
+        loc.ip.isBlank() || loc.ip == "\u2014" -> false
+        homeIp.isBlank() -> connected
+        else -> loc.ip != homeIp
     }
 
     val spinY = remember { Animatable(0f) }
@@ -351,167 +566,158 @@ fun DotGlobeSection(modifier: Modifier = Modifier) {
             val cx = sidePx / 2f
             val cy = sidePx / 2f
             val rad = sidePx / 2f * 0.86f
-            val popupWpx = with(density) { 170.dp.toPx() }
-            val popupHpx = with(density) { 58.dp.toPx() }
+            val uiScale = (side.value / 330f).coerceIn(1f, 1.35f)
+            val popupWpx = with(density) { (128f * uiScale).dp.toPx() }
+            val popupHpx = with(density) { (60f * uiScale).dp.toPx() }
+            var popupSize by remember { mutableStateOf(IntSize.Zero) }
 
-            Box(
-                Modifier
-                    .size(side)
-                    .graphicsLayer {
-                        alpha = if (introAlpha.isNaN()) 1f else introAlpha
-                        val sc = if (introScale.isNaN()) 1f else introScale
-                        scaleX = sc
-                        scaleY = sc
-                    }
-                    .pointerInput(Unit) {
-                        detectDragGestures { change, drag ->
-                            change.consume()
-                            scope.launch {
-                                spinY.snapTo(spinY.value + drag.x / rad)
-                                tiltX.snapTo((tiltX.value + drag.y / rad).coerceIn(-1.35f, 1.35f))
+            val appDir = LocalLayoutDirection.current
+            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                Box(
+                    Modifier
+                        .size(side)
+                        .graphicsLayer {
+                            alpha = if (introAlpha.isNaN()) 1f else introAlpha
+                            val sc = if (introScale.isNaN()) 1f else introScale
+                            scaleX = sc
+                            scaleY = sc
+                        }
+                        .pointerInput(Unit) {
+                            detectDragGestures { change, drag ->
+                                change.consume()
+                                scope.launch {
+                                    spinY.snapTo(spinY.value + drag.x / rad)
+                                    tiltX.snapTo((tiltX.value + drag.y / rad).coerceIn(-1.35f, 1.35f))
+                                }
                             }
                         }
-                    }
-            ) {
-                Canvas(Modifier.fillMaxSize()) {
-                    val a = 0.05f + 0.085f * glow
-                    val rr = rad * (1.12f + 0.06f * glow)
-                    drawCircle(
-                        brush = Brush.radialGradient(
-                            colorStops = arrayOf(
-                                0.70f to Color.Transparent,
-                                0.88f to Color(0xFF53ACFF).copy(alpha = a),
-                                1.0f to Color.Transparent
-                            ),
-                            center = Offset(cx, cy), radius = rr
-                        ),
-                        radius = rr, center = Offset(cx, cy)
-                    )
-                }
-                Canvas(Modifier.fillMaxSize()) {
-                    val spin = spinY.value
-                    val tilt = tiltX.value
-                    val center = Offset(cx, cy)
-
-                    drawCircle(
-                        brush = Brush.radialGradient(
-                            colorStops = if (isDark) arrayOf(
-                                0.0f to Color(0xFF15314F),
-                                0.6f to Color(0xFF0C1D33),
-                                1.0f to Color(0xFF070F1C)
-                            ) else arrayOf(
-                                0.0f to Color(0xFFD2E4F7),
-                                0.6f to Color(0xFFA6C6E9),
-                                1.0f to Color(0xFF7FA3CE)
-                            ),
-                            center = Offset(cx - rad * 0.3f, cy - rad * 0.3f),
-                            radius = rad * 1.25f
-                        ),
-                        radius = rad, center = center
-                    )
-
-                    val cs = cos(spin); val sn = sin(spin)
-                    val ct = cos(tilt); val st = sin(tilt)
-
-                    fun gp(latD: Double, lonD: Double): FloatArray {
-                        val la = Math.toRadians(latD); val lo = Math.toRadians(lonD)
-                        val ax = cos(la) * sin(lo); val ay = sin(la); val az = cos(la) * cos(lo)
-                        val rx = ax * cs + az * sn
-                        val rz = -ax * sn + az * cs
-                        val ty = ay * ct - rz * st
-                        val tz = ay * st + rz * ct
-                        return floatArrayOf((cx + rad * rx).toFloat(), (cy - rad * ty).toFloat(), tz.toFloat())
-                    }
-                    var lonM = -180
-                    while (lonM < 180) {
-                        var prev: FloatArray? = null
-                        var la = -80
-                        while (la <= 80) {
-                            val p = gp(la.toDouble(), lonM.toDouble())
-                            val pr = prev
-                            if (pr != null && pr[2] > 0f && p[2] > 0f)
-                                drawLine(gridColor, Offset(pr[0], pr[1]), Offset(p[0], p[1]), strokeWidth = 1f)
-                            prev = p; la += 8
-                        }
-                        lonM += 30
-                    }
-                    for (latP in intArrayOf(-60, -30, 0, 30, 60)) {
-                        var prev: FloatArray? = null
-                        var lo = -180
-                        while (lo <= 180) {
-                            val p = gp(latP.toDouble(), lo.toDouble())
-                            val pr = prev
-                            if (pr != null && pr[2] > 0f && p[2] > 0f)
-                                drawLine(gridColor, Offset(pr[0], pr[1]), Offset(p[0], p[1]), strokeWidth = 1f)
-                            prev = p; lo += 8
-                        }
-                    }
-
-                    dotPaint.color = dotColor.copy(alpha = 0.92f).toArgb()
-                    dotPaint.strokeWidth = rad * 0.011f
-                    var nPts = 0
-                    for (i in land.bx.indices) {
-                        val ax = land.bx[i]; val ay = land.by[i]; val az = land.bz[i]
-                        val rx = ax * cs + az * sn
-                        val rz = -ax * sn + az * cs
-                        val ty = ay * ct - rz * st
-                        val tz = ay * st + rz * ct
-                        if (tz > 0.02f) {
-                            pointBuf[nPts++] = cx + rad * rx
-                            pointBuf[nPts++] = cy - rad * ty
-                        }
-                    }
-                    drawIntoCanvas { canvas ->
-                        canvas.nativeCanvas.drawPoints(pointBuf, 0, nPts, dotPaint)
-                    }
-                }
-
-                Canvas(Modifier.fillMaxSize()) {
-                    val m = project(loc.lat, loc.lon, spinY.value, tiltX.value, cx, cy, rad)
-                    if (m[2] > 0f) {
-                        val mc = Offset(m[0], m[1])
-                        drawCircle(markerColor.copy(alpha = 0.22f * (1f - pulse)),
-                            radius = rad * (0.04f + 0.06f * pulse), center = mc)
-                        drawCircle(markerColor.copy(alpha = 0.85f), radius = rad * 0.020f, center = mc)
-                        drawCircle(Color.White, radius = rad * 0.009f, center = mc)
-                        drawLine(markerColor.copy(alpha = 0.6f), mc,
-                            Offset(m[0], m[1] - rad * 0.10f), strokeWidth = 1.5f)
-                    }
-                }
-
-                Card(
-                    modifier = Modifier
-                        .width(170.dp)
-                        .offset {
-                            val m = project(loc.lat, loc.lon, spinY.value, tiltX.value, cx, cy, rad)
-                            val x = (m[0] - popupWpx / 2f).coerceIn(2f, sidePx - popupWpx - 2f)
-                            val y = (m[1] - popupHpx - sidePx * 0.06f).coerceIn(2f, sidePx - popupHpx - 2f)
-                            IntOffset(x.roundToInt(), y.roundToInt())
-                        }
-                        .graphicsLayer {
-                            val tz = project(loc.lat, loc.lon, spinY.value, tiltX.value, cx, cy, rad)[2]
-                            alpha = (tz / 0.25f).coerceIn(0f, 1f) * (if (introAlpha.isNaN()) 1f else introAlpha)
-                        },
-                    shape = RoundedCornerShape(10.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = if (isDark) Color(0xFF0E1B2E).copy(alpha = 0.94f)
-                        else Color(0xFFF2F7FD).copy(alpha = 0.96f)
-                    )
                 ) {
-                    Crossfade(targetState = loc, animationSpec = tween(400), label = "ipText") { l ->
-                        Column(Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) {
-                            Text(
-                                l.ip,
-                                color = dotColor,
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = FontWeight.Bold,
-                                style = MaterialTheme.typography.labelLarge
-                            )
-                            Text(
-                                "${l.city}, ${l.country}",
-                                color = if (isDark) Color(0xFFC8D4E4) else Color(0xFF44546B),
-                                style = MaterialTheme.typography.bodySmall
-                            )
+                    Canvas(Modifier.fillMaxSize()) {
+                        val a = 0.05f + 0.085f * glow
+                        val rr = rad * (1.12f + 0.06f * glow)
+                        drawCircle(
+                            brush = Brush.radialGradient(
+                                colorStops = arrayOf(
+                                    0.70f to Color.Transparent,
+                                    0.88f to themePrimary.copy(alpha = a),
+                                    1.0f to Color.Transparent
+                                ),
+                                center = Offset(cx, cy), radius = rr
+                            ),
+                            radius = rr, center = Offset(cx, cy)
+                        )
+                    }
+                    Canvas(Modifier.fillMaxSize()) {
+                        val spin = spinY.value
+                        val tilt = tiltX.value
+                        val center = Offset(cx, cy)
+
+                        drawCircle(
+                            brush = Brush.radialGradient(
+                                colorStops = arrayOf(
+                                    0.0f to sphereInner,
+                                    0.6f to sphereMid,
+                                    1.0f to sphereEdge
+                                ),
+                                center = Offset(cx - rad * 0.3f, cy - rad * 0.3f),
+                                radius = rad * 1.25f
+                            ),
+                            radius = rad, center = center
+                        )
+
+                        val cs = cos(spin); val sn = sin(spin)
+                        val ct = cos(tilt); val st = sin(tilt)
+
+                        fun gp(latD: Double, lonD: Double): FloatArray {
+                            val la = Math.toRadians(latD); val lo = Math.toRadians(lonD)
+                            val ax = cos(la) * sin(lo); val ay = sin(la); val az = cos(la) * cos(lo)
+                            val rx = ax * cs + az * sn
+                            val rz = -ax * sn + az * cs
+                            val ty = ay * ct - rz * st
+                            val tz = ay * st + rz * ct
+                            return floatArrayOf((cx + rad * rx).toFloat(), (cy - rad * ty).toFloat(), tz.toFloat())
+                        }
+                        var lonM = -180
+                        while (lonM < 180) {
+                            var prev: FloatArray? = null
+                            var la = -80
+                            while (la <= 80) {
+                                val p = gp(la.toDouble(), lonM.toDouble())
+                                val pr = prev
+                                if (pr != null && pr[2] > 0f && p[2] > 0f)
+                                    drawLine(gridColor, Offset(pr[0], pr[1]), Offset(p[0], p[1]), strokeWidth = 1f)
+                                prev = p; la += 8
+                            }
+                            lonM += 30
+                        }
+                        for (latP in intArrayOf(-60, -30, 0, 30, 60)) {
+                            var prev: FloatArray? = null
+                            var lo = -180
+                            while (lo <= 180) {
+                                val p = gp(latP.toDouble(), lo.toDouble())
+                                val pr = prev
+                                if (pr != null && pr[2] > 0f && p[2] > 0f)
+                                    drawLine(gridColor, Offset(pr[0], pr[1]), Offset(p[0], p[1]), strokeWidth = 1f)
+                                prev = p; lo += 8
+                            }
+                        }
+
+                        dotPaint.color = dotColor.copy(alpha = 0.92f).toArgb()
+                        dotPaint.strokeWidth = rad * 0.011f
+                        var nPts = 0
+                        for (i in land.bx.indices) {
+                            val ax = land.bx[i]; val ay = land.by[i]; val az = land.bz[i]
+                            val rx = ax * cs + az * sn
+                            val rz = -ax * sn + az * cs
+                            val ty = ay * ct - rz * st
+                            val tz = ay * st + rz * ct
+                            if (tz > 0.02f) {
+                                pointBuf[nPts++] = cx + rad * rx
+                                pointBuf[nPts++] = cy - rad * ty
+                            }
+                        }
+                        drawIntoCanvas { canvas ->
+                            canvas.nativeCanvas.drawPoints(pointBuf, 0, nPts, dotPaint)
+                        }
+                    }
+
+                    Canvas(Modifier.fillMaxSize()) {
+                        val m = project(loc.lat, loc.lon, spinY.value, tiltX.value, cx, cy, rad)
+                        if (m[2] > 0f) {
+                            val mc = Offset(m[0], m[1])
+                            drawCircle(markerColor.copy(alpha = 0.26f * (1f - pulse)),
+                                radius = rad * (0.05f + 0.07f * pulse), center = mc)
+                            drawCircle(markerColor, radius = rad * 0.030f, center = mc)
+                            drawCircle(Color.White, radius = rad * 0.014f, center = mc)
+                            drawLine(markerColor.copy(alpha = 0.75f), mc,
+                                Offset(m[0], m[1] - rad * 0.13f), strokeWidth = 2f)
+                        }
+                    }
+
+                    Card(
+                        modifier = Modifier
+                            .widthIn(max = (198f * uiScale).dp)
+                            .onSizeChanged { popupSize = it }
+                            .absoluteOffset {
+                                val m = project(loc.lat, loc.lon, spinY.value, tiltX.value, cx, cy, rad)
+                                val pw = if (popupSize.width > 0) popupSize.width.toFloat() else popupWpx
+                                val ph = if (popupSize.height > 0) popupSize.height.toFloat() else popupHpx
+                                val x = m[0] - pw / 2f
+                                val y = m[1] - ph - sidePx * 0.03f
+                                IntOffset(x.roundToInt(), y.roundToInt())
+                            }
+                            .graphicsLayer {
+                                val tz = project(loc.lat, loc.lon, spinY.value, tiltX.value, cx, cy, rad)[2]
+                                alpha = (tz / 0.25f).coerceIn(0f, 1f) *
+                                        (if (introAlpha.isNaN()) 1f else introAlpha)
+                            },
+                        shape = RoundedCornerShape(14.dp),
+                        border = BorderStroke(1.4.dp, popupBorder),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                        colors = CardDefaults.cardColors(containerColor = popupBg)
+                    ) {
+                        CompositionLocalProvider(LocalLayoutDirection provides appDir) {
+                            IpLocatorContent(loc, themePrimary, markerColor, secured, pulse, uiScale)
                         }
                     }
                 }
@@ -525,6 +731,10 @@ fun DotGlobeSection(modifier: Modifier = Modifier) {
             animationSpec = tween(450),
             label = "pillColor"
         )
+        val offline = rememberInternetOffline()
+        val alive by TunnelHealth.alive.collectAsState()
+        val noData = conn == Connection.CONNECTED && alive == false
+        val statusColor = if (offline || noData) Color(0xFFE0413C) else pillColor
         val pop = remember { Animatable(1f) }
         var firstState by remember { mutableStateOf(true) }
         LaunchedEffect(connected) {
@@ -542,21 +752,29 @@ fun DotGlobeSection(modifier: Modifier = Modifier) {
                     scaleY = pop.value
                 }
                 .clip(RoundedCornerShape(50))
-                .background(pillColor.copy(alpha = 0.14f))
-                .border(1.dp, pillColor.copy(alpha = 0.40f), RoundedCornerShape(50))
+                .background(statusColor.copy(alpha = 0.14f))
+                .border(1.dp, statusColor.copy(alpha = 0.40f), RoundedCornerShape(50))
                 .padding(horizontal = 16.dp, vertical = 6.dp)
         ) {
-            Crossfade(targetState = connected, animationSpec = tween(350), label = "statusText") { isOn ->
-                val nowTick = rememberTick(isOn)
-                val text = if (isOn && connectedAt > 0L) {
-                    val secs = ((nowTick - connectedAt) / 1000L).coerceAtLeast(0L)
-                    val clock = localizeDigits(fmtHMS(secs), lang)
-                    val time = if (lang == Lang.FA) "\u202A$clock\u202C" else clock
-                    Strings.get(lang, "conn_connected_for").format(time)
-                } else Strings.get(lang, "conn_disconnected")
+            Crossfade(targetState = offline to connected, animationSpec = tween(350), label = "statusText") { st ->
+                val isOff = st.first
+                val isOn = st.second
+                val nowTick = rememberTick(isOn && !isOff)
+                val label = when {
+                    isOff -> Strings.get(lang, "stab_direct_offline")
+                    isOn && noData -> Strings.get(lang, "conn_no_data")
+                    isOn && connectedAt > 0L -> {
+                        val secs = ((nowTick - connectedAt) / 1000L).coerceAtLeast(0L)
+                        val clock = localizeDigits(fmtHMS(secs), lang)
+                        val time = if (lang == Lang.FA) "\u202A$clock\u202C" else clock
+                        Strings.get(lang, "conn_connected_for").format(time)
+                    }
+                    else -> Strings.get(lang, "conn_disconnected")
+                }
                 Text(
-                    text,
-                    color = pillColor,
+                    label,
+                    color = statusColor,
+                    fontFamily = if (lang == Lang.FA) VazirFont else LexendFont,
                     fontWeight = FontWeight.Light,
                     style = MaterialTheme.typography.titleLarge
                 )

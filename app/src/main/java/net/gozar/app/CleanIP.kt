@@ -3,6 +3,7 @@ package net.gozar.app
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -41,14 +42,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 
-/**
- * Finds "clean" Cloudflare CDN edge IPs — ones still reachable under filtering — by
- * sampling Cloudflare's published IPv4 ranges and TCP-probing port 443 on each. The
- * connect time is the latency; unreachable/blocked IPs time out and are dropped.
- */
 object CleanIpScanner {
 
-    // Cloudflare IPv4 CDN ranges (cloudflare.com/ips-v4) as (base, prefix).
     private val CIDRS = listOf(
         "173.245.48.0" to 20, "103.21.244.0" to 22, "103.22.200.0" to 22,
         "103.31.4.0" to 22, "141.101.64.0" to 18, "108.162.192.0" to 18,
@@ -58,7 +53,7 @@ object CleanIpScanner {
     )
 
     private val ranges = CIDRS.map { (base, prefix) ->
-        Pair(ipToLong(base), 1L shl (32 - prefix))   // (baseAsLong, size)
+        Pair(ipToLong(base), 1L shl (32 - prefix))
     }
     private val totalSize = ranges.sumOf { it.second }
 
@@ -80,7 +75,6 @@ object CleanIpScanner {
         return longToIp(ranges[0].first)
     }
 
-    // Distinct random IPs sampled across all ranges, weighted by range size.
     fun candidates(n: Int): List<String> {
         val rnd = java.util.Random()
         val set = LinkedHashSet<String>()
@@ -144,10 +138,16 @@ fun CleanIpScreen() {
                 val sel = c == count
                 if (sel) {
                     Button(onClick = { count = c }, shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.weight(1f)) { Text(n("$c")) }
+                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp),
+                        modifier = Modifier.weight(1f)) {
+                        Text(n("$c"), maxLines = 1, softWrap = false, style = MaterialTheme.typography.labelLarge)
+                    }
                 } else {
                     OutlinedButton(onClick = { if (!scanning) count = c }, shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.weight(1f)) { Text(n("$c")) }
+                        contentPadding = PaddingValues(horizontal = 4.dp, vertical = 8.dp),
+                        modifier = Modifier.weight(1f)) {
+                        Text(n("$c"), maxLines = 1, softWrap = false, style = MaterialTheme.typography.labelLarge)
+                    }
                 }
             }
         }

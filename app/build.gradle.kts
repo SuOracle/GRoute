@@ -1,34 +1,8 @@
 import java.util.Properties
-import java.io.FileInputStream
-
-val localProps = Properties().apply {
-    val f = rootProject.file("local.properties")
-    if (f.exists()) f.reader(Charsets.UTF_8).use { load(it) }
-}
-
-fun localProp(key: String): String = localProps.getProperty(key, "")
-
-fun bcString(value: String): String = buildString {
-    append('"')
-    value.forEach { c ->
-        when {
-            c == '\\' -> append("\\\\")
-            c == '"' -> append("\\\"")
-            c.code in 32..126 -> append(c)
-            else -> append("\\u%04x".format(c.code))
-        }
-    }
-    append('"')
-}
 
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
-}
-
-val secrets = Properties().apply {
-    val f = rootProject.file("secrets.properties")
-    if (f.exists()) load(FileInputStream(f))
 }
 
 android {
@@ -46,19 +20,25 @@ android {
         versionCode = 4
         versionName = "1.2.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        buildConfigField("String", "DEFAULT_SUB_URL", "\"${secrets.getProperty("DEFAULT_SUB_URL", "")}\"")
-        buildConfigField("String", "DONATION_CARD_NUMBER", bcString(localProp("DONATION_CARD_NUMBER")))
-        buildConfigField("String", "DONATION_CARD_HOLDER", bcString(localProp("DONATION_CARD_HOLDER")))
     }
 
     signingConfigs {
         create("release") {
-            val kf = System.getenv("KEYSTORE_FILE")
-            if (kf != null) {
-                storeFile = file(kf)
+            val envKeystore = System.getenv("KEYSTORE_FILE")
+            val propsFile = rootProject.file("keystore.properties")
+            if (envKeystore != null) {
+                storeFile = file(envKeystore)
                 storePassword = System.getenv("KEYSTORE_PASSWORD")
                 keyAlias = System.getenv("KEY_ALIAS")
                 keyPassword = System.getenv("KEY_PASSWORD")
+            } else if (propsFile.exists()) {
+                val props = Properties().apply {
+                    propsFile.inputStream().use { load(it) }
+                }
+                storeFile = rootProject.file(props.getProperty("storeFile"))
+                storePassword = props.getProperty("storePassword")
+                keyAlias = props.getProperty("keyAlias")
+                keyPassword = props.getProperty("keyPassword")
             }
         }
     }
@@ -73,9 +53,17 @@ android {
         buildConfig = true
     }
 
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+
     buildTypes {
         release {
-            if (System.getenv("KEYSTORE_FILE") != null) {
+            val hasSigning = System.getenv("KEYSTORE_FILE") != null ||
+                    rootProject.file("keystore.properties").exists()
+            if (hasSigning) {
                 signingConfig = signingConfigs.getByName("release")
             }
             isMinifyEnabled = true
@@ -103,6 +91,7 @@ android {
 }
 
 dependencies {
+    implementation(project(":strongswan"))
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.compose.material3)
@@ -114,6 +103,11 @@ dependencies {
     implementation(files("libs/gozarcore.aar"))
     implementation("androidx.compose.material:material-icons-extended")
     implementation("dev.chrisbanes.haze:haze:1.6.0")
+    implementation("com.google.zxing:core:3.5.3")
+    implementation("androidx.camera:camera-core:1.4.1")
+    implementation("androidx.camera:camera-camera2:1.4.1")
+    implementation("androidx.camera:camera-lifecycle:1.4.1")
+    implementation("androidx.camera:camera-view:1.4.1")
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)

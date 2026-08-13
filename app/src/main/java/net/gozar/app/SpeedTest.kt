@@ -10,11 +10,13 @@ import java.net.URL
 object SpeedTest {
 
     private const val PROXY_HOST = "127.0.0.1"
-    private const val PROXY_PORT = 10626
+    private val PROXY_PORT get() = MixedPort.value
     private const val DELAY_URL = "https://www.gstatic.com/generate_204"
     private const val DOWNLOAD_URL = "https://speed.cloudflare.com/__down?bytes=26214400"
 
-    private fun proxy() = Proxy(Proxy.Type.SOCKS, InetSocketAddress(PROXY_HOST, PROXY_PORT))
+    private fun proxy() =
+        if (IkeController.active) Proxy.NO_PROXY
+        else Proxy(Proxy.Type.SOCKS, InetSocketAddress(PROXY_HOST, PROXY_PORT))
 
     private fun measureOnce(timeoutMs: Int): Int? = try {
         val conn = (URL(DELAY_URL).openConnection(proxy()) as HttpURLConnection).apply {

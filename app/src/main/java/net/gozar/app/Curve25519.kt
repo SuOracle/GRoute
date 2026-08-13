@@ -3,16 +3,6 @@ package net.gozar.app
 import android.util.Base64
 import java.security.SecureRandom
 
-/**
- * X25519 (Curve25519) scalar multiplication — a faithful port of TweetNaCl's
- * crypto_scalarmult, used to derive WireGuard public keys from a private key.
- *
- * Verified against the RFC 7748 test vectors before shipping:
- *   priv 77076d0a… -> pub 8520f009…   (and the second/"Bob" vector)
- *
- * Only used for key generation; the data path is handled by Xray-core's
- * native WireGuard outbound.
- */
 object Curve25519 {
 
     private fun car25519(o: LongArray) {

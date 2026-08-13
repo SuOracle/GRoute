@@ -9,6 +9,7 @@ import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
@@ -17,18 +18,26 @@ import android.view.View
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.absoluteOffset
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -50,6 +59,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
@@ -96,7 +110,7 @@ internal val TehranFallback = IpLocation("\u2014", "Tehran", "Iran", "IR", 35.68
 object LocationFetcher {
     suspend fun fetch(throughProxy: Boolean): IpLocation? = withContext(Dispatchers.IO) {
         val proxy = if (throughProxy)
-            java.net.Proxy(java.net.Proxy.Type.SOCKS, java.net.InetSocketAddress("127.0.0.1", 10626))
+            java.net.Proxy(java.net.Proxy.Type.SOCKS, java.net.InetSocketAddress("127.0.0.1", MixedPort.value))
         else java.net.Proxy.NO_PROXY
         val ip = fetchPlainIp(proxy, "https://api4.ipify.org")
             ?: fetchPlainIp(proxy, "https://api6.ipify.org")
@@ -193,8 +207,8 @@ private fun globeFrameRateModifier(): Modifier {
     } else Modifier
 }
 
-private const val GLOBE_RENDER_MAX = 512
-private const val GLOBE_RENDER_SCALE = 85
+private const val GLOBE_RENDER_MAX = 768
+private const val GLOBE_RENDER_SCALE = 100
 private const val GLOBE_RAD_FRAC = 0.86
 
 private fun sampleMask(lon: Float, lat: Float): Float {
@@ -228,10 +242,10 @@ private class GlobeLut(val bs: Int) {
     val dx: FloatArray
     val dy: FloatArray
     val tz: FloatArray
-    val shade: FloatArray
-    val spec: FloatArray
-    val limb: FloatArray
-    val alpha: IntArray
+    val shade: ByteArray
+    val spec: ByteArray
+    val limb: ByteArray
+    val alpha: ByteArray
 
     init {
         val radS = bs / 2f * GLOBE_RAD_FRAC.toFloat()
@@ -253,7 +267,7 @@ private class GlobeLut(val bs: Int) {
         }
         n = count
         idx = IntArray(n); dx = FloatArray(n); dy = FloatArray(n); tz = FloatArray(n)
-        shade = FloatArray(n); spec = FloatArray(n); limb = FloatArray(n); alpha = IntArray(n)
+        shade = ByteArray(n); spec = ByteArray(n); limb = ByteArray(n); alpha = ByteArray(n)
 
         var w = 0
         for (py in 0 until bs) {
@@ -277,13 +291,27 @@ private class GlobeLut(val bs: Int) {
                 if (discA > 1f) discA = 1f else if (discA < 0f) discA = 0f
                 idx[w] = row + pxi
                 dx[w] = dxn; dy[w] = dyn; tz[w] = tzv
-                shade[w] = 0.26f + 0.74f * ndotl
-                spec[w] = s4 * s4 * s2 * 0.30f
-                limb[w] = lb
-                alpha[w] = (discA * 255f).toInt() shl 24
+                shade[w] = (ndotl * 255f + 0.5f).toInt().coerceIn(0, 255).toByte()
+                spec[w] = (s4 * s4 * s2 * 255f + 0.5f).toInt().coerceIn(0, 255).toByte()
+                limb[w] = (lb * 255f + 0.5f).toInt().coerceIn(0, 255).toByte()
+                alpha[w] = (discA * 255f + 0.5f).toInt().coerceIn(0, 255).toByte()
                 w++
             }
         }
+    }
+}
+
+private object GlobeLutCache {
+    private var size = -1
+    private var value: GlobeLut? = null
+
+    @Synchronized
+    fun get(bs: Int): GlobeLut? = if (bs == size) value else null
+
+    @Synchronized
+    fun put(bs: Int, lut: GlobeLut) {
+        size = bs
+        value = lut
     }
 }
 
@@ -313,10 +341,12 @@ private fun sampleMaskNearest(lon: Float, lat: Float): Float {
     return (mask[iv * mw + iu].toInt() and 0xFF) * (1f / 255f)
 }
 
+private const val INV255 = 1f / 255f
+
 private fun renderRange(
     px: IntArray, lut: GlobeLut,
     cs: Float, sn: Float, ct: Float, st: Float, deg: Float,
-    bilinear: Boolean, start: Int, stride: Int
+    bilinear: Boolean, light: Boolean, start: Int, stride: Int
 ) {
     val idx = lut.idx; val dxA = lut.dx; val dyA = lut.dy; val tzA = lut.tz
     val shA = lut.shade; val spA = lut.spec; val lbA = lut.limb; val alA = lut.alpha
@@ -336,23 +366,41 @@ private fun renderRange(
         val cov = if (bilinear) sampleMask(lon, lat) else sampleMaskNearest(lon, lat)
         val inv = 1f - cov
         val coast = cov * inv * 4f
-        val sh = shA[k]; val sp = spA[k]; val lb = lbA[k]
+        val shRaw = (shA[k].toInt() and 0xFF) * INV255
+        val sh = if (light) 0.58f + 0.42f * shRaw else 0.26f + 0.74f * shRaw
+        val sp = ((spA[k].toInt() and 0xFF) * INV255) * 0.30f
+        val lbRaw = (lbA[k].toInt() and 0xFF) * INV255
+        val lb = if (light) 0.68f + 0.32f * lbRaw else lbRaw
 
-        val ocR = (4f + 20f * sh) + sp * 69f
-        val ocG = (11f + 47f * sh) + sp * 92f
-        val ocB = (26f + 84f * sh) + sp * 127.5f
-        val lnR = 42f + 68f * sh
-        val lnG = 78f + 80f * sh
-        val lnB = 162f + 74f * sh
+        val ocR: Float; val ocG: Float; val ocB: Float
+        val lnR: Float; val lnG: Float; val lnB: Float
+        val csR: Float; val csG: Float; val csB: Float
+        if (light) {
+            ocR = (96f + 74f * sh) + sp * 60f
+            ocG = (146f + 66f * sh) + sp * 70f
+            ocB = (196f + 48f * sh) + sp * 80f
+            lnR = 28f + 40f * sh
+            lnG = 74f + 58f * sh
+            lnB = 132f + 62f * sh
+            csR = 30f; csG = 58f; csB = 92f
+        } else {
+            ocR = (4f + 20f * sh) + sp * 69f
+            ocG = (11f + 47f * sh) + sp * 92f
+            ocB = (26f + 84f * sh) + sp * 127.5f
+            lnR = 42f + 68f * sh
+            lnG = 78f + 80f * sh
+            lnB = 162f + 74f * sh
+            csR = 42.3f; csG = 69.2f; csB = 96.9f
+        }
 
-        val fr = (ocR * inv + lnR * cov + coast * 42.3f) * lb
-        val fg = (ocG * inv + lnG * cov + coast * 69.2f) * lb
-        val fb = (ocB * inv + lnB * cov + coast * 96.9f) * lb
+        val fr = (ocR * inv + lnR * cov + coast * csR) * lb
+        val fg = (ocG * inv + lnG * cov + coast * csG) * lb
+        val fb = (ocB * inv + lnB * cov + coast * csB) * lb
 
         var r2 = fr.toInt(); if (r2 > 255) r2 = 255
         var g2 = fg.toInt(); if (g2 > 255) g2 = 255
         var b2 = fb.toInt(); if (b2 > 255) b2 = 255
-        px[idx[k]] = alA[k] or (r2 shl 16) or (g2 shl 8) or b2
+        px[idx[k]] = ((alA[k].toInt() and 0xFF) shl 24) or (r2 shl 16) or (g2 shl 8) or b2
         k += stride
     }
 }
@@ -360,7 +408,7 @@ private fun renderRange(
 private val RENDER_CORES = Runtime.getRuntime().availableProcessors().coerceIn(2, 8)
 
 private suspend fun renderGlobeParallel(
-    px: IntArray, lut: GlobeLut, spin: Float, tilt: Float, bilinear: Boolean
+    px: IntArray, lut: GlobeLut, spin: Float, tilt: Float, bilinear: Boolean, light: Boolean
 ) = coroutineScope {
     val cs = cos(spin); val sn = sin(spin)
     val ct = cos(tilt); val st = sin(tilt)
@@ -369,7 +417,7 @@ private suspend fun renderGlobeParallel(
     if (n == 0) return@coroutineScope
     (0 until RENDER_CORES).map { c ->
         launch(Dispatchers.Default) {
-            renderRange(px, lut, cs, sn, ct, st, deg, bilinear, c, RENDER_CORES)
+            renderRange(px, lut, cs, sn, ct, st, deg, bilinear, light, c, RENDER_CORES)
         }
     }.joinAll()
 }
@@ -402,9 +450,43 @@ fun EarthSection(modifier: Modifier = Modifier) {
     val lang = LocalLang.current
 
     val isDark = MaterialTheme.colorScheme.background.luminance() < 0.5f
-    val ipColor = if (isDark) Color(0xFFBEDCFF) else Color(0xFF0E5AA6)
-    val markerColor = if (isDark) Color(0xFF4BF0A4) else Color(0xFF0E9E55)
-    val nodeColor = Color(0xFF8FC0FF)
+    val themeSpec = tween<Color>(520, easing = FastOutSlowInEasing)
+    val markerColor by animateColorAsState(AppGreen, themeSpec, label = "globeMarker")
+    val offline = rememberInternetOffline()
+    val badgeTarget = MaterialTheme.colorScheme.primary
+    var badgeShown by remember { mutableStateOf(badgeTarget) }
+    val badgeTint by animateColorAsState(badgeShown, tween(450), label = "badgeTint")
+    val badgePulse by rememberInfiniteTransition(label = "badgePulse").animateFloat(
+        initialValue = 0.45f, targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            tween(1100, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "badgePulseV"
+    )
+    val badgeGlow = if (connected && !offline) badgePulse else 0.65f
+    val nodeColor by animateColorAsState(
+        targetValue = if (isDark) Color(0xFF8FC0FF) else Color(0xFF2E5F9E),
+        animationSpec = themeSpec,
+        label = "globeNode"
+    )
+    val haloColor by animateColorAsState(
+        targetValue = if (isDark) Color(0xFF5E8FE0) else Color(0xFF3E6CB4),
+        animationSpec = themeSpec,
+        label = "globeHalo"
+    )
+    val popupBg by animateColorAsState(
+        targetValue = if (isDark) Color(0xFF0B1424).copy(alpha = 0.97f)
+        else Color(0xFFFFFFFF).copy(alpha = 0.97f),
+        animationSpec = themeSpec,
+        label = "globePopupBg"
+    )
+    val popupBorder by animateColorAsState(
+        targetValue = if (isDark) lerp(badgeTarget, Color.Black, 0.55f)
+        else lerp(badgeTarget, Color.White, 0.34f),
+        animationSpec = themeSpec,
+        label = "globePopupBorder"
+    )
     val hazeState = LocalHazeState.current
     val surfaceColor = MaterialTheme.colorScheme.surface
 
@@ -412,14 +494,16 @@ fun EarthSection(modifier: Modifier = Modifier) {
     val scope = rememberCoroutineScope()
 
     var loc by remember { mutableStateOf(TehranFallback) }
+    var homeIp by remember { mutableStateOf("") }
     val globeContext = androidx.compose.ui.platform.LocalContext.current
+    LaunchedEffect(loc.ip, offline, badgeTarget) { badgeShown = badgeTarget }
     val killSwitchOn by ConfigStore.get(globeContext).killSwitch.collectAsState()
     LaunchedEffect(conn, killSwitchOn) {
         when (conn) {
             Connection.CONNECTED -> {
                 delay(1200)
                 repeat(5) { attempt ->
-                    val l = LocationFetcher.fetch(throughProxy = true)
+                    val l = LocationFetcher.fetch(throughProxy = !IkeController.active)
                     if (l != null) {
                         loc = l
                         return@LaunchedEffect
@@ -436,6 +520,7 @@ fun EarthSection(modifier: Modifier = Modifier) {
                     val l = LocationFetcher.fetch(throughProxy = false)
                     if (l != null) {
                         loc = l
+                        if (l.ip.isNotBlank() && l.ip != "\u2014") homeIp = l.ip
                         return@LaunchedEffect
                     }
                     delay(1000)
@@ -443,6 +528,11 @@ fun EarthSection(modifier: Modifier = Modifier) {
             }
             else -> {}
         }
+    }
+    val secured = when {
+        loc.ip.isBlank() || loc.ip == "\u2014" -> false
+        homeIp.isBlank() -> connected
+        else -> loc.ip != homeIp
     }
 
     val spinY = remember { Animatable(0f) }
@@ -470,7 +560,6 @@ fun EarthSection(modifier: Modifier = Modifier) {
     )
 
     var appeared by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { appeared = true }
     val introAlpha by animateFloatAsState(if (appeared) 1f else 0f, tween(550), label = "introA")
     val introScale by animateFloatAsState(if (appeared) 1f else 0.96f, tween(550, easing = FastOutSlowInEasing), label = "introS")
 
@@ -484,8 +573,10 @@ fun EarthSection(modifier: Modifier = Modifier) {
             val cx = sidePx / 2f
             val cy = sidePx / 2f
             val rad = sidePx / 2f * GLOBE_RAD_FRAC.toFloat()
-            val popupWpx = with(density) { 170.dp.toPx() }
-            val popupHpx = with(density) { 58.dp.toPx() }
+            val uiScale = (side.value / 330f).coerceIn(1f, 1.35f)
+            val popupWpx = with(density) { (128f * uiScale).dp.toPx() }
+            val popupHpx = with(density) { (60f * uiScale).dp.toPx() }
+            var popupSize by remember { mutableStateOf(IntSize.Zero) }
 
             val bs = remember(sidePx) { (sidePx.roundToInt() * GLOBE_RENDER_SCALE / 100).coerceIn(96, GLOBE_RENDER_MAX) }
             var lut by remember(bs) { mutableStateOf<GlobeLut?>(null) }
@@ -501,159 +592,192 @@ fun EarthSection(modifier: Modifier = Modifier) {
             var frameImage by remember(bs) { mutableStateOf(img[0]) }
             var renderedSpin by remember { mutableStateOf(Float.NaN) }
             var renderedTilt by remember { mutableStateOf(0f) }
-            var front = remember(bs) { 0 }
+            val front = remember(bs) { intArrayOf(0) }
+            val fadeBmp = remember(bs) {
+                android.graphics.Bitmap.createBitmap(bs, bs, android.graphics.Bitmap.Config.ARGB_8888)
+            }
+            val fadeImg = remember(bs) { fadeBmp.asImageBitmap() }
+            var fadeFrom by remember(bs) { mutableStateOf<ImageBitmap?>(null) }
+            val themeFade = remember(bs) { Animatable(1f) }
+            var themeSettled by remember(bs) { mutableStateOf(false) }
+
+            LaunchedEffect(isDark, bs) {
+                if (!themeSettled) {
+                    themeSettled = true
+                    return@LaunchedEffect
+                }
+                if (renderedSpin.isNaN()) return@LaunchedEffect
+                android.graphics.Canvas(fadeBmp)
+                    .drawBitmap(frameImage.asAndroidBitmap(), 0f, 0f, null)
+                fadeFrom = fadeImg
+                themeFade.snapTo(0f)
+                themeFade.animateTo(1f, tween(520, easing = FastOutSlowInEasing))
+                fadeFrom = null
+            }
 
             LaunchedEffect(Unit) {
                 withContext(Dispatchers.Default) { EarthMask.data }
             }
 
             LaunchedEffect(bs) {
-                delay(350)
+                val cached = GlobeLutCache.get(bs)
+                if (cached != null) {
+                    lut = cached
+                    return@LaunchedEffect
+                }
                 lut = withContext(Dispatchers.Default) {
                     EarthMask.data
-                    GlobeLut(bs)
+                    GlobeLut(bs).also { GlobeLutCache.put(bs, it) }
                 }
             }
 
-            LaunchedEffect(bs, lut) {
+            LaunchedEffect(bs, lut, isDark) {
                 val l = lut ?: return@LaunchedEffect
                 snapshotFlow { spinY.value to tiltX.value }
                     .conflate()
                     .collect { (s, t) ->
-                        val back = 1 - front
+                        val back = 1 - front[0]
                         withContext(Dispatchers.Default) {
-                            renderGlobeParallel(px, l, s, t, true)
+                            renderGlobeParallel(px, l, s, t, true, !isDark)
                             bmp[back].setPixels(px, 0, bs, 0, 0, bs, bs)
                         }
-                        front = back
+                        front[0] = back
                         frameImage = img[back]
                         renderedSpin = s; renderedTilt = t
+                        appeared = true
                     }
             }
 
-            Box(
-                Modifier
-                    .size(side)
-                    .then(globeFrameRateModifier())
-                    .graphicsLayer {
-                        val a = if (introAlpha.isNaN()) 1f else introAlpha
-                        val sc = if (introScale.isNaN()) 1f else introScale
-                        alpha = a
-                        scaleX = sc
-                        scaleY = sc
-                    }
-                    .pointerInput(Unit) {
-                        detectDragGestures { change, drag ->
-                            change.consume()
-                            scope.launch {
-                                spinY.snapTo(spinY.value + drag.x / rad)
-                                tiltX.snapTo((tiltX.value + drag.y / rad).coerceIn(-1.35f, 1.35f))
+            val appDir = LocalLayoutDirection.current
+            CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Ltr) {
+                Box(
+                    Modifier
+                        .size(side)
+                        .then(globeFrameRateModifier())
+                        .graphicsLayer {
+                            val a = if (introAlpha.isNaN()) 1f else introAlpha
+                            val sc = if (introScale.isNaN()) 1f else introScale
+                            alpha = a
+                            scaleX = sc
+                            scaleY = sc
+                            compositingStrategy = CompositingStrategy.ModulateAlpha
+                        }
+                        .pointerInput(Unit) {
+                            detectDragGestures { change, drag ->
+                                change.consume()
+                                scope.launch {
+                                    spinY.snapTo(spinY.value + drag.x / rad)
+                                    tiltX.snapTo((tiltX.value + drag.y / rad).coerceIn(-1.35f, 1.35f))
+                                }
                             }
                         }
-                    }
-            ) {
-                Canvas(Modifier.fillMaxSize()) {
-                    val halo = Color(0xFF5E8FE0)
-                    val rr = rad * 1.30f
-                    drawCircle(
-                        brush = Brush.radialGradient(
-                            colorStops = arrayOf(
-                                0.735f to halo.copy(alpha = 0f),
-                                0.775f to halo.copy(alpha = 0.259f),
-                                0.84f to halo.copy(alpha = 0.141f),
-                                0.91f to halo.copy(alpha = 0.055f),
-                                1.0f to halo.copy(alpha = 0f)
-                            ),
-                            center = Offset(cx, cy), radius = rr
-                        ),
-                        radius = rr, center = Offset(cx, cy)
-                    )
-                }
-                Canvas(Modifier.fillMaxSize()) {
-                    drawImage(
-                        image = frameImage,
-                        srcOffset = IntOffset.Zero,
-                        srcSize = IntSize(bs, bs),
-                        dstOffset = IntOffset.Zero,
-                        dstSize = IntSize(sidePx.roundToInt(), sidePx.roundToInt())
-                    )
-                }
-
-                Canvas(Modifier.fillMaxSize()) {
-                    val ms = if (renderedSpin.isNaN()) spinY.value else renderedSpin
-                    val mt = if (renderedSpin.isNaN()) tiltX.value else renderedTilt
-                    val m = project(loc.lat, loc.lon, ms, mt, cx, cy, rad)
-                    if (m[2] > 0f) {
-                        val mc = Offset(m[0], m[1])
-                        val ph1 = ringT
-                        val ph2 = (ringT + 0.5f) % 1f
-                        drawCircle(
-                            nodeColor.copy(alpha = (0.45f * (1f - ph1)).coerceIn(0f, 1f)),
-                            radius = rad * (0.028f + 0.11f * ph1), center = mc,
-                            style = Stroke(width = 1.6f)
-                        )
-                        drawCircle(
-                            nodeColor.copy(alpha = (0.45f * (1f - ph2)).coerceIn(0f, 1f)),
-                            radius = rad * (0.028f + 0.11f * ph2), center = mc,
-                            style = Stroke(width = 1.6f)
-                        )
-                        drawLine(
-                            brush = Brush.verticalGradient(
-                                colors = listOf(nodeColor.copy(alpha = 0f), nodeColor.copy(alpha = 0.75f)),
-                                startY = m[1] - rad * 0.16f, endY = m[1]
-                            ),
-                            start = Offset(m[0], m[1] - rad * 0.16f),
-                            end = mc, strokeWidth = 2f
-                        )
+                ) {
+                    Canvas(Modifier.fillMaxSize()) {
+                        val halo = haloColor
+                        val rr = rad * 1.30f
                         drawCircle(
                             brush = Brush.radialGradient(
-                                colors = listOf(nodeColor.copy(alpha = 0.55f), nodeColor.copy(alpha = 0f)),
-                                center = mc, radius = rad * 0.055f
+                                colorStops = arrayOf(
+                                    0.735f to halo.copy(alpha = 0f),
+                                    0.775f to halo.copy(alpha = 0.259f),
+                                    0.84f to halo.copy(alpha = 0.141f),
+                                    0.91f to halo.copy(alpha = 0.055f),
+                                    1.0f to halo.copy(alpha = 0f)
+                                ),
+                                center = Offset(cx, cy), radius = rr
                             ),
-                            radius = rad * 0.055f, center = mc
+                            radius = rr, center = Offset(cx, cy)
                         )
-                        drawCircle(Color(0xFFE4F1FF), radius = rad * 0.019f, center = mc)
-                        drawCircle(Color.White, radius = rad * 0.008f, center = mc)
                     }
-                }
-
-                Card(
-                    modifier = Modifier
-                        .width(170.dp)
-                        .offset {
-                            val ms = if (renderedSpin.isNaN()) spinY.value else renderedSpin
-                            val mt = if (renderedSpin.isNaN()) tiltX.value else renderedTilt
-                            val m = project(loc.lat, loc.lon, ms, mt, cx, cy, rad)
-                            val x = (m[0] - popupWpx / 2f).coerceIn(2f, sidePx - popupWpx - 2f)
-                            val y = (m[1] - popupHpx - sidePx * 0.06f).coerceIn(2f, sidePx - popupHpx - 2f)
-                            IntOffset(x.roundToInt(), y.roundToInt())
+                    Canvas(Modifier.fillMaxSize()) {
+                        val prev = fadeFrom
+                        val dst = IntSize(sidePx.roundToInt(), sidePx.roundToInt())
+                        if (prev != null) {
+                            drawImage(
+                                image = prev,
+                                srcOffset = IntOffset.Zero,
+                                srcSize = IntSize(bs, bs),
+                                dstOffset = IntOffset.Zero,
+                                dstSize = dst,
+                                filterQuality = FilterQuality.High
+                            )
                         }
-                        .graphicsLayer {
-                            val ms = if (renderedSpin.isNaN()) spinY.value else renderedSpin
-                            val mt = if (renderedSpin.isNaN()) tiltX.value else renderedTilt
-                            val tz = project(loc.lat, loc.lon, ms, mt, cx, cy, rad)[2]
-                            alpha = (tz / 0.25f).coerceIn(0f, 1f) * introAlpha
-                        },
-                    shape = RoundedCornerShape(10.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = if (isDark) Color(0xFF0E1B2E).copy(alpha = 0.94f)
-                        else Color(0xFFF2F7FD).copy(alpha = 0.96f)
-                    )
-                ) {
-                    Crossfade(targetState = loc, animationSpec = tween(400), label = "ipText") { l ->
-                        Column(Modifier.padding(horizontal = 10.dp, vertical = 7.dp)) {
-                            Text(
-                                l.ip,
-                                color = ipColor,
-                                fontFamily = FontFamily.Monospace,
-                                fontWeight = FontWeight.Bold,
-                                style = MaterialTheme.typography.labelLarge
+                        drawImage(
+                            image = frameImage,
+                            srcOffset = IntOffset.Zero,
+                            srcSize = IntSize(bs, bs),
+                            dstOffset = IntOffset.Zero,
+                            dstSize = dst,
+                            alpha = if (prev != null) themeFade.value else 1f,
+                            filterQuality = FilterQuality.High
+                        )
+                    }
+
+                    Canvas(Modifier.fillMaxSize()) {
+                        val ms = if (renderedSpin.isNaN()) spinY.value else renderedSpin
+                        val mt = if (renderedSpin.isNaN()) tiltX.value else renderedTilt
+                        val m = project(loc.lat, loc.lon, ms, mt, cx, cy, rad)
+                        if (m[2] > 0f) {
+                            val mc = Offset(m[0], m[1])
+                            val ph1 = ringT
+                            val ph2 = (ringT + 0.5f) % 1f
+                            drawCircle(
+                                nodeColor.copy(alpha = (0.45f * (1f - ph1)).coerceIn(0f, 1f)),
+                                radius = rad * (0.028f + 0.11f * ph1), center = mc,
+                                style = Stroke(width = 1.6f)
                             )
-                            Text(
-                                "${l.city}, ${l.country}",
-                                color = if (isDark) Color(0xFFC8D4E4) else Color(0xFF44546B),
-                                style = MaterialTheme.typography.bodySmall
+                            drawCircle(
+                                nodeColor.copy(alpha = (0.45f * (1f - ph2)).coerceIn(0f, 1f)),
+                                radius = rad * (0.028f + 0.11f * ph2), center = mc,
+                                style = Stroke(width = 1.6f)
                             )
+                            drawLine(
+                                brush = Brush.verticalGradient(
+                                    colors = listOf(nodeColor.copy(alpha = 0f), nodeColor.copy(alpha = 0.75f)),
+                                    startY = m[1] - rad * 0.16f, endY = m[1]
+                                ),
+                                start = Offset(m[0], m[1] - rad * 0.16f),
+                                end = mc, strokeWidth = 2f
+                            )
+                            drawCircle(
+                                brush = Brush.radialGradient(
+                                    colors = listOf(nodeColor.copy(alpha = 0.55f), nodeColor.copy(alpha = 0f)),
+                                    center = mc, radius = rad * 0.055f
+                                ),
+                                radius = rad * 0.055f, center = mc
+                            )
+                            drawCircle(Color(0xFFE4F1FF), radius = rad * 0.019f, center = mc)
+                            drawCircle(Color.White, radius = rad * 0.008f, center = mc)
+                        }
+                    }
+
+                    Card(
+                        modifier = Modifier
+                            .widthIn(max = (198f * uiScale).dp)
+                            .onSizeChanged { popupSize = it }
+                            .absoluteOffset {
+                                val sp = if (renderedSpin.isNaN()) spinY.value else renderedSpin
+                                val tl = if (renderedSpin.isNaN()) tiltX.value else renderedTilt
+                                val m = project(loc.lat, loc.lon, sp, tl, cx, cy, rad)
+                                val pw = if (popupSize.width > 0) popupSize.width.toFloat() else popupWpx
+                                val ph = if (popupSize.height > 0) popupSize.height.toFloat() else popupHpx
+                                val x = m[0] - pw / 2f
+                                val y = m[1] - ph - sidePx * 0.03f
+                                IntOffset(x.roundToInt(), y.roundToInt())
+                            }
+                            .graphicsLayer {
+                                val sp = if (renderedSpin.isNaN()) spinY.value else renderedSpin
+                                val tl = if (renderedSpin.isNaN()) tiltX.value else renderedTilt
+                                val tz = project(loc.lat, loc.lon, sp, tl, cx, cy, rad)[2]
+                                alpha = (tz / 0.25f).coerceIn(0f, 1f) * introAlpha
+                            },
+                        shape = RoundedCornerShape(14.dp),
+                        border = BorderStroke(1.4.dp, popupBorder),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+                        colors = CardDefaults.cardColors(containerColor = popupBg)
+                    ) {
+                        CompositionLocalProvider(LocalLayoutDirection provides appDir) {
+                            IpLocatorContent(loc, badgeTint, markerColor, secured, badgeGlow, uiScale)
                         }
                     }
                 }
@@ -667,6 +791,9 @@ fun EarthSection(modifier: Modifier = Modifier) {
             animationSpec = tween(450),
             label = "pillColor"
         )
+        val alive by TunnelHealth.alive.collectAsState()
+        val noData = conn == Connection.CONNECTED && alive == false
+        val statusColor = if (offline || noData) Color(0xFFE0413C) else pillColor
         val pop = remember { Animatable(1f) }
         var firstState by remember { mutableStateOf(true) }
         LaunchedEffect(connected) {
@@ -692,21 +819,29 @@ fun EarthSection(modifier: Modifier = Modifier) {
                         noiseFactor = 0f
                     } else Modifier
                 )
-                .background(pillColor.copy(alpha = 0.14f))
-                .border(1.dp, pillColor.copy(alpha = 0.40f), RoundedCornerShape(50))
+                .background(statusColor.copy(alpha = 0.14f))
+                .border(1.dp, statusColor.copy(alpha = 0.40f), RoundedCornerShape(50))
                 .padding(horizontal = 16.dp, vertical = 6.dp)
         ) {
-            Crossfade(targetState = connected, animationSpec = tween(350), label = "statusText") { isOn ->
-                val nowTick = rememberTick(isOn)
-                val text = if (isOn && connectedAt > 0L) {
-                    val secs = ((nowTick - connectedAt) / 1000L).coerceAtLeast(0L)
-                    val clock = localizeDigits(fmtHMS(secs), lang)
-                    val time = if (lang == Lang.FA) "\u202A$clock\u202C" else clock
-                    Strings.get(lang, "conn_connected_for").format(time)
-                } else Strings.get(lang, "conn_disconnected")
+            Crossfade(targetState = offline to connected, animationSpec = tween(350), label = "statusText") { st ->
+                val isOff = st.first
+                val isOn = st.second
+                val nowTick = rememberTick(isOn && !isOff)
+                val label = when {
+                    isOff -> Strings.get(lang, "stab_direct_offline")
+                    isOn && noData -> Strings.get(lang, "conn_no_data")
+                    isOn && connectedAt > 0L -> {
+                        val secs = ((nowTick - connectedAt) / 1000L).coerceAtLeast(0L)
+                        val clock = localizeDigits(fmtHMS(secs), lang)
+                        val time = if (lang == Lang.FA) "\u202A$clock\u202C" else clock
+                        Strings.get(lang, "conn_connected_for").format(time)
+                    }
+                    else -> Strings.get(lang, "conn_disconnected")
+                }
                 Text(
-                    text,
-                    color = pillColor,
+                    label,
+                    color = statusColor,
+                    fontFamily = if (lang == Lang.FA) VazirFont else LexendFont,
                     fontWeight = FontWeight.Light,
                     style = MaterialTheme.typography.titleLarge
                 )

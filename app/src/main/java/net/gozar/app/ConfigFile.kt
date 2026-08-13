@@ -52,6 +52,13 @@ object ConfigFile {
     class NeedsPassword : Exception()
     class BadFile : Exception()
     class ForeignApp : Exception()
+    class NotABackup : Exception()
+
+    class Backup(
+        val configs: List<ProxyConfig>,
+        val subs: List<Subscription>,
+        val settings: JSONObject?
+    )
 
     fun isPasswordProtected(bytes: ByteArray): Boolean {
         if (bytes.size < 5) throw BadFile()
@@ -62,7 +69,32 @@ object ConfigFile {
     fun encode(context: Context, configs: List<ProxyConfig>, password: String?): ByteArray {
         val arr = JSONArray()
         configs.forEach { arr.put(it.toJson()) }
-        val plain = JSONObject().put("v", 1).put("configs", arr).toString().toByteArray(Charsets.UTF_8)
+        val root = JSONObject().put("v", 1).put("configs", arr)
+        return seal(context, root, password)
+    }
+
+    fun encodeBackup(
+        context: Context,
+        configs: List<ProxyConfig>,
+        subs: List<Subscription>,
+        settings: JSONObject,
+        password: String?
+    ): ByteArray {
+        val cfgArr = JSONArray()
+        configs.forEach { cfgArr.put(it.toJson()) }
+        val subArr = JSONArray()
+        subs.forEach { subArr.put(it.toJson()) }
+        val root = JSONObject()
+            .put("v", 2)
+            .put("kind", "backup")
+            .put("configs", cfgArr)
+            .put("subs", subArr)
+            .put("settings", settings)
+        return seal(context, root, password)
+    }
+
+    private fun seal(context: Context, root: JSONObject, password: String?): ByteArray {
+        val plain = root.toString().toByteArray(Charsets.UTF_8)
 
         val rnd = SecureRandom()
         val salt = ByteArray(SALT_LEN).also { rnd.nextBytes(it) }
@@ -88,6 +120,36 @@ object ConfigFile {
     }
 
     fun decode(context: Context, bytes: ByteArray, password: String?): List<ProxyConfig> {
+        val root = open(context, bytes, password)
+        val arr = root.optJSONArray("configs") ?: throw BadFile()
+        return (0 until arr.length()).map { i ->
+            ProxyConfig.fromJson(arr.getJSONObject(i)).copy(
+                id = java.util.UUID.randomUUID().toString(),
+                subId = "",
+                locked = true,
+                source = ConfigSource.COMMUNITY
+            )
+        }
+    }
+
+    fun isBackup(context: Context, bytes: ByteArray, password: String?): Boolean =
+        open(context, bytes, password).optString("kind") == "backup"
+
+    fun decodeBackup(context: Context, bytes: ByteArray, password: String?): Backup {
+        val root = open(context, bytes, password)
+        if (root.optString("kind") != "backup") throw NotABackup()
+        val cfgArr = root.optJSONArray("configs") ?: throw BadFile()
+        val configs = (0 until cfgArr.length()).map {
+            ProxyConfig.fromJson(cfgArr.getJSONObject(it))
+        }
+        val subArr = root.optJSONArray("subs") ?: JSONArray()
+        val subs = (0 until subArr.length()).map {
+            Subscription.fromJson(subArr.getJSONObject(it))
+        }
+        return Backup(configs, subs, root.optJSONObject("settings"))
+    }
+
+    private fun open(context: Context, bytes: ByteArray, password: String?): JSONObject {
         if (bytes.size < 5 + SALT_LEN + IV_LEN + 16) throw BadFile()
         if (String(bytes, 0, 4, Charsets.US_ASCII) != MAGIC) throw BadFile()
 
@@ -112,19 +174,10 @@ object ConfigFile {
             if (hasPw) throw WrongPassword() else throw BadFile()
         }
 
-        val root = try {
+        return try {
             JSONObject(String(plain, Charsets.UTF_8))
         } catch (e: Exception) {
             throw BadFile()
-        }
-        val arr = root.optJSONArray("configs") ?: throw BadFile()
-        return (0 until arr.length()).map { i ->
-            ProxyConfig.fromJson(arr.getJSONObject(i)).copy(
-                id = java.util.UUID.randomUUID().toString(),
-                subId = "",
-                locked = true,
-                source = ConfigSource.COMMUNITY
-            )
         }
     }
 

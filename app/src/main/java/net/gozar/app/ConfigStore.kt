@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONArray
+import org.json.JSONObject
 import java.util.concurrent.Executors
 
 enum class PerAppMode { OFF, ALLOWLIST, BLOCKLIST }
@@ -120,12 +121,65 @@ class ConfigStore private constructor(context: Context) {
         prefs.edit().putStringSet(KEY_SNIFF_TYPES, cur).apply()
     }
 
-    private val _sortBySpeed = MutableStateFlow(prefs.getBoolean(KEY_SORT_SPEED, false))
-    val sortBySpeed: StateFlow<Boolean> = _sortBySpeed.asStateFlow()
+    private val _blockWhenOff = MutableStateFlow(prefs.getBoolean(KEY_BLOCK_WHEN_OFF, false))
+    val blockWhenOff: StateFlow<Boolean> = _blockWhenOff.asStateFlow()
 
-    fun setSortBySpeed(enabled: Boolean) {
-        _sortBySpeed.value = enabled
-        prefs.edit().putBoolean(KEY_SORT_SPEED, enabled).apply()
+    fun setBlockWhenOff(enabled: Boolean) {
+        _blockWhenOff.value = enabled
+        prefs.edit().putBoolean(KEY_BLOCK_WHEN_OFF, enabled).apply()
+    }
+
+    private val _onionRouting = MutableStateFlow(prefs.getBoolean(KEY_ONION, false))
+    val onionRouting: StateFlow<Boolean> = _onionRouting.asStateFlow()
+
+    fun setOnionRouting(enabled: Boolean) {
+        _onionRouting.value = enabled
+        prefs.edit().putBoolean(KEY_ONION, enabled).apply()
+    }
+
+    private val _encryptedDns = MutableStateFlow(prefs.getBoolean(KEY_ENC_DNS, false))
+    val encryptedDns: StateFlow<Boolean> = _encryptedDns.asStateFlow()
+
+    fun setEncryptedDns(enabled: Boolean) {
+        _encryptedDns.value = enabled
+        prefs.edit().putBoolean(KEY_ENC_DNS, enabled).apply()
+    }
+
+    private val _fakeDns = MutableStateFlow(prefs.getBoolean(KEY_FAKE_DNS, false))
+    val fakeDns: StateFlow<Boolean> = _fakeDns.asStateFlow()
+
+    fun setFakeDns(enabled: Boolean) {
+        _fakeDns.value = enabled
+        prefs.edit().putBoolean(KEY_FAKE_DNS, enabled).apply()
+    }
+
+    private val _adBlock = MutableStateFlow(prefs.getBoolean(KEY_AD_BLOCK, false))
+    val adBlock: StateFlow<Boolean> = _adBlock.asStateFlow()
+
+    fun setAdBlock(enabled: Boolean) {
+        _adBlock.value = enabled
+        prefs.edit().putBoolean(KEY_AD_BLOCK, enabled).apply()
+    }
+
+    private val _mixedPort = MutableStateFlow(prefs.getInt(KEY_MIXED_PORT, 10626))
+    val mixedPort: StateFlow<Int> = _mixedPort.asStateFlow()
+
+    fun setMixedPort(port: Int) {
+        val v = port.coerceIn(1024, 65535)
+        _mixedPort.value = v
+        prefs.edit().putInt(KEY_MIXED_PORT, v).apply()
+        MixedPort.value = v
+    }
+
+    private val _sortMode = MutableStateFlow(
+        prefs.getString(KEY_SORT_MODE, null)
+            ?: if (prefs.getBoolean(KEY_SORT_SPEED, false)) SORT_FASTEST else SORT_ADDED
+    )
+    val sortMode: StateFlow<String> = _sortMode.asStateFlow()
+
+    fun setSortMode(mode: String) {
+        _sortMode.value = mode
+        prefs.edit().putString(KEY_SORT_MODE, mode).apply()
     }
 
     private val _autoSelect = MutableStateFlow(prefs.getBoolean(KEY_AUTOSELECT, false))
@@ -197,6 +251,20 @@ class ConfigStore private constructor(context: Context) {
         persistConfigs()
     }
 
+    fun addToLocalSub(name: String, configs: List<ProxyConfig>) {
+        if (configs.isEmpty()) return
+        val existing = _subscriptions.value.firstOrNull { it.name == name && it.url.isBlank() }
+        val sub = existing ?: Subscription(
+            name = name,
+            url = "",
+            lastUpdated = System.currentTimeMillis()
+        )
+        if (existing == null) _subscriptions.value = _subscriptions.value + sub
+        _configs.value = _configs.value + configs.map { it.copy(subId = sub.id) }
+        persistConfigs()
+        persistSubscriptions()
+    }
+
     fun update(config: ProxyConfig) {
         _configs.value = _configs.value.map { existing ->
             when {
@@ -221,33 +289,24 @@ class ConfigStore private constructor(context: Context) {
         persistConfigs()
     }
 
-    fun seedDefaultSubscriptionIfNeeded(): Subscription? {
-        if (DEFAULT_SUB_URL.isBlank()) return null
-        if (prefs.getBoolean(KEY_DEFAULT_SEEDED, false)) return null
-        prefs.edit().putBoolean(KEY_DEFAULT_SEEDED, true).apply()
-        if (_subscriptions.value.any { it.id == DEFAULT_SUB_ID }) return null
-        val sub = Subscription(
-            name = DEFAULT_SUB_NAME,
-            url = DEFAULT_SUB_URL,
-            lastUpdated = 0L,
-            id = DEFAULT_SUB_ID
+    fun seedDefaultAetherIfNeeded(): ProxyConfig? {
+        if (prefs.getBoolean(KEY_AETHER_SEEDED, false)) return null
+        prefs.edit().putBoolean(KEY_AETHER_SEEDED, true).apply()
+        if (_configs.value.any { it.protocol == "aether" }) return null
+        val cfg = ProxyConfig(
+            name = "Aether (MASQUE)",
+            protocol = "aether",
+            address = "127.0.0.1",
+            port = AetherController.SOCKS_PORT,
+            aetherMode = "masque",
+            aetherScan = "balanced",
+            aetherHttp2 = true,
+            source = ConfigSource.COMMUNITY
         )
-        _subscriptions.value = _subscriptions.value + sub
-        persistSubscriptions()
-        return sub
-    }
-
-    fun defaultSubPendingFirstFetch(): Subscription? =
-        _subscriptions.value.firstOrNull { it.id == DEFAULT_SUB_ID && it.lastUpdated == 0L }
-
-    fun migrateDefaultSubUrlIfNeeded(): Subscription? {
-        if (DEFAULT_SUB_URL.isBlank()) return null
-        val existing = _subscriptions.value.firstOrNull { it.id == DEFAULT_SUB_ID } ?: return null
-        if (existing.url == DEFAULT_SUB_URL) return null
-        val updated = existing.copy(url = DEFAULT_SUB_URL, lastUpdated = 0L)
-        _subscriptions.value = _subscriptions.value.map { if (it.id == DEFAULT_SUB_ID) updated else it }
-        persistSubscriptions()
-        return updated
+        _configs.value = _configs.value + cfg
+        persistConfigs()
+        if (_selectedId.value.isNullOrEmpty()) setSelectedId(cfg.id)
+        return cfg
     }
 
     fun upsertSubscription(sub: Subscription, fetched: List<ProxyConfig>) {
@@ -269,6 +328,114 @@ class ConfigStore private constructor(context: Context) {
     fun renameSubscription(id: String, newName: String) {
         _subscriptions.value = _subscriptions.value.map { if (it.id == id) it.copy(name = newName) else it }
         persistSubscriptions()
+    }
+
+    fun deleteConfigsByIds(ids: Set<String>) {
+        if (ids.isEmpty()) return
+        _configs.value = _configs.value.filterNot { it.id in ids }
+        if (_selectedId.value in ids) setSelectedId(null)
+        persistConfigs()
+    }
+
+    fun duplicateIds(): Set<String> {
+        val seen = HashSet<String>()
+        val dupes = LinkedHashSet<String>()
+        _configs.value.forEach { c ->
+            val key = listOf(
+                c.protocol, c.address.trim().lowercase(), c.port.toString(),
+                c.uuid, c.password, c.method, c.encryption, c.flow,
+                c.alterId.toString(), c.network, c.security, c.sni,
+                c.path, c.host, c.publicKey, c.shortId, c.serviceName,
+                c.privateKey, c.localAddress, c.torCountry, c.aetherMode
+            ).joinToString("\u0000")
+            if (!seen.add(key)) dupes.add(c.id)
+        }
+        return dupes
+    }
+
+    fun deleteAllConfigs() {
+        _configs.value = emptyList()
+        _subscriptions.value = emptyList()
+        setSelectedId(null)
+        persistConfigs()
+        persistSubscriptions()
+    }
+
+    fun settingsSnapshot(): JSONObject = JSONObject().apply {
+        put("fragment", _fragment.value)
+        put("fragmentPackets", _fragmentPackets.value)
+        put("fragmentLength", _fragmentLength.value)
+        put("fragmentInterval", _fragmentInterval.value)
+        put("splitRouting", _splitRouting.value)
+        put("sniffing", _sniffing.value)
+        put("sniffTypes", JSONArray(_sniffTypes.value.toList()))
+        put("killSwitch", _killSwitch.value)
+        put("mux", _mux.value)
+        put("muxConcurrency", _muxConcurrency.value)
+        put("globeStyle", _globeStyle.value)
+        put("blockWhenOff", _blockWhenOff.value)
+        put("onionRouting", _onionRouting.value)
+        put("encryptedDns", _encryptedDns.value)
+        put("fakeDns", _fakeDns.value)
+        put("adBlock", _adBlock.value)
+        put("mixedPort", _mixedPort.value)
+        put("sortMode", _sortMode.value)
+        put("autoSelect", _autoSelect.value)
+        put("autoRefreshHours", _autoRefreshHours.value)
+        put("themeMode", _themeMode.value.name)
+        put("lang", _lang.value.name)
+        put("perAppMode", _perAppMode.value.name)
+        put("perAppList", JSONArray(_perAppList.value.toList()))
+        put("selectedId", _selectedId.value ?: "")
+    }
+
+    fun restoreSettings(o: JSONObject) {
+        if (o.has("fragment")) setFragment(o.getBoolean("fragment"))
+        if (o.has("fragmentPackets")) setFragmentPackets(o.getString("fragmentPackets"))
+        if (o.has("fragmentLength")) setFragmentLength(o.getString("fragmentLength"))
+        if (o.has("fragmentInterval")) setFragmentInterval(o.getString("fragmentInterval"))
+        if (o.has("splitRouting")) setSplitRouting(o.getBoolean("splitRouting"))
+        if (o.has("sniffing")) setSniffing(o.getBoolean("sniffing"))
+        o.optJSONArray("sniffTypes")?.let { arr ->
+            val set = (0 until arr.length()).map { arr.getString(it) }.toSet()
+            _sniffTypes.value = set
+            prefs.edit().putStringSet(KEY_SNIFF_TYPES, set).apply()
+        }
+        if (o.has("killSwitch")) setKillSwitch(o.getBoolean("killSwitch"))
+        if (o.has("mux")) setMux(o.getBoolean("mux"))
+        if (o.has("muxConcurrency")) setMuxConcurrency(o.getInt("muxConcurrency"))
+        if (o.has("globeStyle")) setGlobeStyle(o.getString("globeStyle"))
+        if (o.has("blockWhenOff")) setBlockWhenOff(o.getBoolean("blockWhenOff"))
+        if (o.has("onionRouting")) setOnionRouting(o.getBoolean("onionRouting"))
+        if (o.has("encryptedDns")) setEncryptedDns(o.getBoolean("encryptedDns"))
+        if (o.has("fakeDns")) setFakeDns(o.getBoolean("fakeDns"))
+        if (o.has("adBlock")) setAdBlock(o.getBoolean("adBlock"))
+        if (o.has("mixedPort")) setMixedPort(o.getInt("mixedPort"))
+        if (o.has("sortMode")) setSortMode(o.getString("sortMode"))
+        if (o.has("autoSelect")) setAutoSelect(o.getBoolean("autoSelect"))
+        if (o.has("autoRefreshHours")) setAutoRefreshHours(o.getInt("autoRefreshHours"))
+        o.optString("themeMode").takeIf { it.isNotEmpty() }?.let { v ->
+            runCatching { setThemeMode(ThemeMode.valueOf(v)) }
+        }
+        o.optString("lang").takeIf { it.isNotEmpty() }?.let { v ->
+            runCatching { setLang(Lang.valueOf(v)) }
+        }
+        o.optString("perAppMode").takeIf { it.isNotEmpty() }?.let { v ->
+            runCatching { setPerAppMode(PerAppMode.valueOf(v)) }
+        }
+        o.optJSONArray("perAppList")?.let { arr ->
+            setPerAppList((0 until arr.length()).map { arr.getString(it) }.toSet())
+        }
+    }
+
+    fun restoreBackup(configs: List<ProxyConfig>, subs: List<Subscription>, settings: JSONObject?) {
+        _configs.value = configs
+        _subscriptions.value = subs
+        persistConfigs()
+        persistSubscriptions()
+        settings?.let { restoreSettings(it) }
+        val wanted = settings?.optString("selectedId").orEmpty()
+        setSelectedId(if (configs.any { it.id == wanted }) wanted else configs.firstOrNull()?.id)
     }
 
     fun deleteSubscription(id: String) {
@@ -402,11 +569,18 @@ class ConfigStore private constructor(context: Context) {
         private const val KEY_SNIFF_TYPES = "sniffing_types"
         private const val KEY_AUTOSELECT = "auto_select_fastest"
         private const val KEY_SORT_SPEED = "sort_by_speed"
+        private const val KEY_SORT_MODE = "sort_mode"
+        private const val KEY_MIXED_PORT = "mixed_port"
+        private const val KEY_AD_BLOCK = "ad_block"
+        private const val KEY_FAKE_DNS = "fake_dns"
+        private const val KEY_ENC_DNS = "encrypted_dns"
+        private const val KEY_ONION = "onion_routing"
+        private const val KEY_BLOCK_WHEN_OFF = "block_when_off"
+        const val SORT_ADDED = "added"
+        const val SORT_ALPHA = "alpha"
+        const val SORT_FASTEST = "fastest"
         private const val KEY_THEME = "theme_mode"
-        private const val KEY_DEFAULT_SEEDED = "default_sub_seeded"
-        private const val DEFAULT_SUB_ID = "default-sub"
-        private const val DEFAULT_SUB_NAME = "Default Sub"
-        private val DEFAULT_SUB_URL = BuildConfig.DEFAULT_SUB_URL
+        private const val KEY_AETHER_SEEDED = "aether_seeded"
         private const val KEY_AUTOREFRESH = "auto_refresh_hours"
         private const val DEFAULT_AUTOREFRESH = 1
         private const val KEY_LANG = "app_lang"

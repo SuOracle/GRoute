@@ -6,6 +6,20 @@ import java.net.URLDecoder
 
 object ConfigParser {
 
+    fun parseBundle(text: String, source: ConfigSource = ConfigSource.PERSONAL): List<ProxyConfig> {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return emptyList()
+        val lower = trimmed.lowercase()
+        if (lower.contains("[interface]") && lower.contains("[peer]")) {
+            val single = parseWireguardConf(trimmed, source)
+            if (single != null) return listOf(single)
+        }
+        return trimmed.split('\n', '\r')
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .mapNotNull { parse(it, source) }
+    }
+
     fun parse(uri: String, source: ConfigSource = ConfigSource.PERSONAL): ProxyConfig? {
         val trimmed = uri.trim()
         val lower = trimmed.lowercase()
@@ -14,6 +28,16 @@ object ConfigParser {
             lower.startsWith("vmess://") -> parseVmess(trimmed.substring(8), source)
             lower.startsWith("trojan://") -> parseTrojan(trimmed.substring(9), source)
             lower.startsWith("ss://") -> parseShadowsocks(trimmed.substring(5), source)
+            lower.startsWith("socks5://") -> parseProxyUrl(trimmed.substring(9), "socks", source)
+            lower.startsWith("socks://") -> parseProxyUrl(trimmed.substring(8), "socks", source)
+            lower.startsWith("http://") -> parseProxyUrl(trimmed.substring(7), "http", source)
+            lower.startsWith("hysteria2://") -> parseHysteria2(trimmed.substring(12), source)
+            lower.startsWith("hy2://") -> parseHysteria2(trimmed.substring(6), source)
+            lower.startsWith("ikev2://") -> parseIkev2(trimmed.substring(8), source)
+            lower.startsWith("wireguard://") -> parseWireguardUri(trimmed.substring(12), source)
+            lower.startsWith("wg://") -> parseWireguardUri(trimmed.substring(5), source)
+            lower.contains("[interface]") && lower.contains("[peer]") ->
+                parseWireguardConf(trimmed, source)
             else -> null
         }
     }
@@ -69,6 +93,25 @@ object ConfigParser {
         )
     } catch (e: Exception) { null }
 
+    private fun parseHysteria2(body: String, source: ConfigSource): ProxyConfig? = try {
+        val (name, userHostPort, p) = splitUserUri(body, "Hysteria2")
+        val (password, address, port) = splitUserHostPort(userHostPort)
+        ProxyConfig(
+            name = name, protocol = "hysteria2", address = address, port = port,
+            password = pctDecode(password),
+            sni = p["sni"].orEmpty().ifEmpty { p["peer"].orEmpty() },
+            host = p["host"] ?: "",
+            alpn = p["alpn"] ?: "",
+            security = "tls",
+            hyObfs = p["obfs"] ?: "",
+            hyObfsPassword = p["obfs-password"].orEmpty().ifEmpty { p["obfsParam"].orEmpty() },
+            hyUpMbps = (p["upmbps"] ?: p["up"] ?: "").toIntOrNull() ?: 0,
+            hyDownMbps = (p["downmbps"] ?: p["down"] ?: "").toIntOrNull() ?: 0,
+            allowInsecure = (p["insecure"] ?: p["allowInsecure"] ?: "") in setOf("1", "true"),
+            source = source
+        )
+    } catch (e: Exception) { null }
+
     private fun parseVmess(body: String, source: ConfigSource): ProxyConfig? = try {
         var b = body
         val h = b.indexOf('#'); if (h >= 0) b = b.substring(0, h)
@@ -93,11 +136,182 @@ object ConfigParser {
         )
     } catch (e: Exception) { null }
 
+    private fun dec(s: String): String = try {
+        java.net.URLDecoder.decode(s, "UTF-8")
+    } catch (e: Exception) {
+        s
+    }
+
+    private fun parseProxyUrl(body: String, proto: String, source: ConfigSource): ProxyConfig? {
+        return try {
+            val hash = body.indexOf('#')
+            val name = if (hash >= 0) dec(body.substring(hash + 1)) else ""
+            val main = if (hash >= 0) body.substring(0, hash) else body
+            val at = main.lastIndexOf('@')
+            var user = ""
+            var pass = ""
+            val hostPart: String
+            if (at >= 0) {
+                val cred = main.substring(0, at)
+                hostPart = main.substring(at + 1)
+                val colon = cred.indexOf(':')
+                if (colon >= 0) {
+                    user = dec(cred.substring(0, colon))
+                    pass = dec(cred.substring(colon + 1))
+                } else user = dec(cred)
+            } else hostPart = main
+            val clean = hostPart.substringBefore('/').substringBefore('?')
+            val colon = clean.lastIndexOf(':')
+            if (colon <= 0) return null
+            val host = clean.substring(0, colon)
+            val port = clean.substring(colon + 1).toIntOrNull() ?: return null
+            ProxyConfig(
+                name = if (name.isNotEmpty()) name else "$host:$port",
+                protocol = proto,
+                address = host,
+                port = port,
+                uuid = user,
+                password = pass,
+                source = source
+            )
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun parseIkev2(body: String, source: ConfigSource): ProxyConfig? {
+        val hash = body.indexOf('#')
+        val label = if (hash >= 0) formDecode(body.substring(hash + 1)) else ""
+        val core = if (hash >= 0) body.substring(0, hash) else body
+        val at = core.lastIndexOf('@')
+        if (at <= 0) return null
+        val creds = core.substring(0, at)
+        val host = core.substring(at + 1).substringBefore('/').trim()
+        if (host.isEmpty()) return null
+        val colon = creds.indexOf(':')
+        if (colon <= 0) return null
+        return ProxyConfig(
+            name = label.ifBlank { host },
+            protocol = "ikev2",
+            address = host,
+            port = 500,
+            sni = host,
+            uuid = formDecode(creds.substring(0, colon)),
+            password = formDecode(creds.substring(colon + 1)),
+            network = "ikev2",
+            security = "none",
+            source = source
+        )
+    }
+
+    fun parseWireguardConf(text: String, source: ConfigSource = ConfigSource.PERSONAL): ProxyConfig? {
+        return try {
+            var section = ""
+            var privateKey = ""
+            var address = ""
+            var mtu = 0
+            var publicKey = ""
+            var preShared = ""
+            var endpoint = ""
+            var reserved = ""
+            var label = ""
+            for (raw in text.lines()) {
+                val line = raw.substringBefore('#').trim()
+                if (line.isEmpty()) continue
+                if (line.startsWith("[") && line.endsWith("]")) {
+                    section = line.lowercase()
+                    continue
+                }
+                val eq = line.indexOf('=')
+                if (eq <= 0) continue
+                val key = line.substring(0, eq).trim().lowercase()
+                val value = line.substring(eq + 1).trim()
+                if (section == "[interface]") {
+                    when (key) {
+                        "privatekey" -> privateKey = value
+                        "address" -> address = value
+                        "mtu" -> mtu = value.toIntOrNull() ?: 0
+                        "reserved" -> reserved = value
+                        "name" -> label = value
+                    }
+                } else if (section == "[peer]") {
+                    when (key) {
+                        "publickey" -> publicKey = value
+                        "presharedkey" -> preShared = value
+                        "endpoint" -> endpoint = value
+                    }
+                }
+            }
+            if (privateKey.isEmpty() || publicKey.isEmpty() || endpoint.isEmpty()) return null
+            val colon = endpoint.lastIndexOf(':')
+            if (colon <= 0) return null
+            val host = endpoint.substring(0, colon).trim('[', ']')
+            val port = endpoint.substring(colon + 1).toIntOrNull() ?: return null
+            ProxyConfig(
+                name = if (label.isNotEmpty()) label else "WireGuard $host",
+                protocol = "wireguard",
+                address = host,
+                port = port,
+                privateKey = privateKey,
+                publicKey = publicKey,
+                password = preShared,
+                localAddress = address,
+                mtu = mtu,
+                reserved = reserved,
+                source = source
+            )
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun parseWireguardUri(body: String, source: ConfigSource): ProxyConfig? {
+        return try {
+            val hash = body.indexOf('#')
+            val name = if (hash >= 0) dec(body.substring(hash + 1)) else ""
+            val main = if (hash >= 0) body.substring(0, hash) else body
+            val q = main.indexOf('?')
+            val core = if (q >= 0) main.substring(0, q) else main
+            val params = HashMap<String, String>()
+            if (q >= 0) {
+                for (part in main.substring(q + 1).split("&")) {
+                    val i = part.indexOf('=')
+                    if (i > 0) params[dec(part.substring(0, i)).lowercase()] = dec(part.substring(i + 1))
+                }
+            }
+            val at = core.lastIndexOf('@')
+            if (at <= 0) return null
+            val key = dec(core.substring(0, at))
+            val hostPart = core.substring(at + 1)
+            val colon = hostPart.lastIndexOf(':')
+            if (colon <= 0) return null
+            val host = hostPart.substring(0, colon).trim('[', ']')
+            val port = hostPart.substring(colon + 1).toIntOrNull() ?: return null
+            ProxyConfig(
+                name = if (name.isNotEmpty()) name else "WireGuard $host",
+                protocol = "wireguard",
+                address = host,
+                port = port,
+                privateKey = key,
+                publicKey = params["publickey"] ?: params["pubkey"] ?: "",
+                password = params["presharedkey"] ?: "",
+                localAddress = params["address"] ?: params["ip"] ?: "",
+                mtu = params["mtu"]?.toIntOrNull() ?: 0,
+                reserved = params["reserved"] ?: "",
+                source = source
+            )
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     private fun parseShadowsocks(body: String, source: ConfigSource): ProxyConfig? = try {
         val hash = body.indexOf('#')
         val name = (if (hash >= 0) formDecode(body.substring(hash + 1)).trim() else "").ifEmpty { "Shadowsocks" }
         var main = if (hash >= 0) body.substring(0, hash) else body
-        val q = main.indexOf('?'); if (q >= 0) main = main.substring(0, q)
+        val q = main.indexOf('?')
+        val p = parseQuery(if (q >= 0) main.substring(q + 1) else "")
+        if (q >= 0) main = main.substring(0, q)
         main = main.trim()
 
         val method: String; val password: String; val address: String; val port: Int
@@ -119,8 +333,47 @@ object ConfigParser {
             val mc = mp.indexOf(':')
             method = mp.substring(0, mc); password = mp.substring(mc + 1)
         }
+        val plugin = p["plugin"].orEmpty()
+        val pluginOpts = java.util.TreeMap<String, String>(String.CASE_INSENSITIVE_ORDER)
+        if (plugin.isNotEmpty()) {
+            plugin.split(';').forEach { part ->
+                val eq = part.indexOf('=')
+                if (eq > 0) pluginOpts[part.substring(0, eq).trim()] = part.substring(eq + 1).trim()
+                else if (part.isNotBlank() && pluginOpts.isEmpty()) pluginOpts["name"] = part.trim()
+            }
+        }
+        val pluginName = pluginOpts["name"].orEmpty().lowercase()
+        val isSimpleObfs = pluginName.startsWith("obfs-local") ||
+                pluginName.startsWith("simple-obfs")
+        val isV2rayPlugin = pluginName.startsWith("v2ray-plugin")
+        val obfsMode = pluginOpts["obfs"].orEmpty().lowercase()
+
+        var network = normalizeNetwork(p["type"])
+        var headerType = normalizeHeaderType(p["headerType"])
+        var host = p["host"].orEmpty()
+        var path = p["path"].orEmpty()
+        var security = p["security"].orEmpty().ifEmpty { "none" }
+
+        if (isSimpleObfs && obfsMode == "http") {
+            network = "tcp"
+            headerType = "http"
+            if (host.isEmpty()) host = pluginOpts["obfs-host"].orEmpty()
+            if (path.isEmpty()) path = pluginOpts["obfs-uri"].orEmpty()
+        } else if (isV2rayPlugin) {
+            network = if (pluginOpts.containsKey("quic")) "quic" else "ws"
+            if (host.isEmpty()) host = pluginOpts["host"].orEmpty()
+            if (path.isEmpty()) path = pluginOpts["path"].orEmpty()
+            if (pluginOpts.containsKey("tls")) security = "tls"
+        }
+
         ProxyConfig(name = name, protocol = "shadowsocks", address = address, port = port,
-            method = method, password = password, source = source)
+            method = method, password = password,
+            network = network.ifEmpty { "tcp" }, headerType = headerType,
+            host = host, path = path, security = security,
+            sni = p["sni"].orEmpty().ifEmpty { if (security == "tls") host else "" },
+            fingerprint = p["fp"].orEmpty().ifEmpty { "chrome" },
+            alpn = p["alpn"].orEmpty(),
+            source = source)
     } catch (e: Exception) { null }
 
     private fun splitUserUri(body: String, default: String): Triple<String, String, Map<String, String>> {
@@ -150,12 +403,18 @@ object ConfigParser {
         return s.substring(0, colon) to s.substring(colon + 1).trim().toInt()
     }
 
-    private fun parseQuery(query: String): Map<String, String> =
-        if (query.isEmpty()) emptyMap()
-        else query.split('&').mapNotNull {
+    private fun parseQuery(query: String): Map<String, String> {
+        val map = java.util.TreeMap<String, String>(String.CASE_INSENSITIVE_ORDER)
+        if (query.isEmpty()) return map
+        query.split('&').forEach {
             val eq = it.indexOf('=')
-            if (eq < 0) null else it.substring(0, eq).trim() to formDecode(it.substring(eq + 1))
-        }.toMap()
+            if (eq > 0) {
+                val key = it.substring(0, eq).trim()
+                if (key.isNotEmpty()) map[key] = formDecode(it.substring(eq + 1))
+            }
+        }
+        return map
+    }
 
     private fun formDecode(s: String): String =
         runCatching { URLDecoder.decode(s, "UTF-8") }.getOrDefault(s)

@@ -24,3 +24,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "GozarNet"
 include(":app")
+include(":strongswan")

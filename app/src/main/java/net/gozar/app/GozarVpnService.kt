@@ -12,6 +12,7 @@ import android.util.Log
 import gozarcore.Gozarcore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -21,6 +22,8 @@ import java.io.File
 class GozarVpnService : VpnService() {
 
     private var tunFd: ParcelFileDescriptor? = null
+    private var aetherSpec: AetherSpec? = null
+    private var torSpec: String? = null
     private var blockFd: ParcelFileDescriptor? = null
     private val scope = CoroutineScope(Dispatchers.IO)
     private var pollJob: Job? = null
@@ -35,6 +38,7 @@ class GozarVpnService : VpnService() {
                 Log.i("XrayCore", line ?: "")
             }
         })
+        TorLog.sink = { line -> Log.i("XrayCore", line) }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -53,6 +57,8 @@ class GozarVpnService : VpnService() {
             }
             else -> {
                 val configJson = intent?.getStringExtra(EXTRA_CONFIG)
+                aetherSpec = AetherSpec.parse(intent?.getStringExtra(EXTRA_AETHER))
+                torSpec = intent?.getStringExtra(EXTRA_TOR)
                 configName = intent?.getStringExtra(EXTRA_NAME) ?: "VPN"
                 stopLabel = intent?.getStringExtra(EXTRA_STOP_LABEL) ?: "Disconnect"
                 if (configJson.isNullOrEmpty()) {
@@ -89,9 +95,45 @@ class GozarVpnService : VpnService() {
 
             try {
                 setupGeoAssets()
+                val spec = aetherSpec
+                if (spec != null) {
+                    if (!AetherController.available(applicationContext)) {
+                        die("Aether engine is not bundled in this build")
+                        return@launch
+                    }
+                    val up = withContext(Dispatchers.IO) {
+                        AetherController.start(applicationContext, spec)
+                    }
+                    if (!up) {
+                        AetherController.stop()
+                        TorController.stop()
+                        die("Aether failed to start")
+                        return@launch
+                    }
+                }
                 runCatching { Gozarcore.stop() }
                 Gozarcore.start(configJson, pfd.detachFd().toLong())
                 Log.i(TAG, "Xray core started, tunnel up")
+                val tor = torSpec
+                if (tor != null) {
+                    if (!TorController.available(applicationContext)) {
+                        die("Tor engine is not bundled in this build")
+                        return@launch
+                    }
+                    val parts = tor.split("|")
+                    val up = withContext(Dispatchers.IO) {
+                        TorController.start(
+                            applicationContext,
+                            parts.getOrElse(0) { "" },
+                            parts.getOrElse(1) { "0" } == "1"
+                        )
+                    }
+                    if (!up) {
+                        TorController.stop()
+                        die("Tor failed to start")
+                        return@launch
+                    }
+                }
                 VpnBridge.sendConnected(applicationContext)
                 startPolling()
             } catch (e: Exception) {
@@ -170,6 +212,8 @@ class GozarVpnService : VpnService() {
         if (tearingDown) return
         val killOn = runCatching { ConfigStore.get(applicationContext).killSwitch.value }.getOrDefault(false)
         if (error != null && killOn) {
+            AetherController.stop()
+            TorController.stop()
             enterKillSwitch(error)
             return
         }
@@ -177,6 +221,8 @@ class GozarVpnService : VpnService() {
         pollJob?.cancel()
         pollJob = null
         runCatching { Gozarcore.stop() }
+        AetherController.stop()
+        TorController.stop()
         if (error != null) VpnBridge.sendError(applicationContext, error)
         else VpnBridge.sendDisconnected(applicationContext)
         runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
@@ -208,6 +254,8 @@ class GozarVpnService : VpnService() {
     }
 
     override fun onDestroy() {
+        AetherController.stop()
+        TorController.stop()
         runCatching { blockFd?.close() }; blockFd = null
         runCatching { getSystemService(NotificationManager::class.java)?.cancel(NOTIF_ID) }
         super.onDestroy()
@@ -231,7 +279,7 @@ class GozarVpnService : VpnService() {
         return Notification.Builder(this, CHANNEL_ID)
             .setContentTitle(configName)
             .setContentText(speedLine)
-            .setSmallIcon(android.R.drawable.ic_lock_lock)
+            .setSmallIcon(R.drawable.notiflock)
             .setContentIntent(pi)
             .addAction(
                 Notification.Action.Builder(
@@ -260,7 +308,7 @@ class GozarVpnService : VpnService() {
         return Notification.Builder(this, CHANNEL_ID)
             .setContentTitle("Kill switch active")
             .setContentText("Connection lost — internet is blocked to prevent leaks")
-            .setSmallIcon(android.R.drawable.ic_lock_lock)
+            .setSmallIcon(R.drawable.notiflock)
             .setContentIntent(pi)
             .addAction(
                 Notification.Action.Builder(
@@ -288,6 +336,8 @@ class GozarVpnService : VpnService() {
         const val ACTION_STOP = "net.gozar.app.STOP"
         const val ACTION_WARM = "net.gozar.app.WARM"
         const val EXTRA_CONFIG = "net.gozar.app.CONFIG"
+        const val EXTRA_AETHER = "net.gozar.app.AETHER"
+        const val EXTRA_TOR = "net.gozar.app.TOR"
         const val EXTRA_NAME = "net.gozar.app.NAME"
         const val EXTRA_STOP_LABEL = "net.gozar.app.STOP_LABEL"
     }

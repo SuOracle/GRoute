@@ -57,11 +57,15 @@ class AutoSelector(private val appContext: Context, private val store: ConfigSto
         configs.map { cfg ->
             launch {
                 sem.withPermit {
-                    val ms = withContext(Dispatchers.IO) {
-                        runCatching { Gozarcore.measureDelay(ConfigBuilder.buildForTest(cfg)) }
-                            .getOrDefault(-1L)
+                    val r = if (cfg.protocol.trim().lowercase() == "ikev2") {
+                        Pinger.pingIke(cfg.address)
+                    } else {
+                        val ms = withContext(Dispatchers.IO) {
+                            runCatching { Gozarcore.measureDelay(ConfigBuilder.buildForTest(cfg)) }
+                                .getOrDefault(-1L)
+                        }
+                        if (ms >= 0) PingResult.Ok(ms.toInt()) else PingResult.Failed
                     }
-                    val r = if (ms >= 0) PingResult.Ok(ms.toInt()) else PingResult.Failed
                     _results.value = _results.value.toMutableMap().apply { put(cfg.id, r) }
                 }
             }
@@ -103,11 +107,21 @@ class AutoSelector(private val appContext: Context, private val store: ConfigSto
 
         val json = ConfigBuilder.build(
             config, store.fragment.value, store.splitRouting.value,
-            store.sniffing.value, store.sniffTypes.value
+            store.sniffing.value, store.sniffTypes.value,
+            adBlock = store.adBlock.value,
+            fakeDns = store.fakeDns.value,
+            encryptedDns = store.encryptedDns.value,
+            onionRouting = store.onionRouting.value
         )
         VpnState.setConnecting(config.id)
         val intent = Intent(appContext, GozarVpnService::class.java)
             .putExtra(GozarVpnService.EXTRA_CONFIG, json)
+            .putExtra(GozarVpnService.EXTRA_AETHER, AetherSpec.from(config)?.toJson())
+            .putExtra(
+                GozarVpnService.EXTRA_TOR,
+                if (config.protocol == "tor")
+                    config.torCountry + "|" + (if (config.torThroughVpn) "1" else "0") else null
+            )
             .putExtra(GozarVpnService.EXTRA_NAME, config.name)
             .putExtra(GozarVpnService.EXTRA_STOP_LABEL, Strings.get(store.lang.value, "disconnect"))
         runCatching { ContextCompat.startForegroundService(appContext, intent) }

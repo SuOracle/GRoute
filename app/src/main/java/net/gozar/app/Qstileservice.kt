@@ -78,11 +78,21 @@ class QsTileService : TileService() {
         if (VpnService.prepare(this) != null) { openApp(); return }
         val json = ConfigBuilder.build(
             config, store.fragment.value, store.splitRouting.value,
-            store.sniffing.value, store.sniffTypes.value
+            store.sniffing.value, store.sniffTypes.value,
+            adBlock = store.adBlock.value,
+            fakeDns = store.fakeDns.value,
+            encryptedDns = store.encryptedDns.value,
+            onionRouting = store.onionRouting.value
         )
         VpnState.setConnecting(config.id)
         val intent = Intent(this, GozarVpnService::class.java)
             .putExtra(GozarVpnService.EXTRA_CONFIG, json)
+            .putExtra(GozarVpnService.EXTRA_AETHER, AetherSpec.from(config)?.toJson())
+            .putExtra(
+                GozarVpnService.EXTRA_TOR,
+                if (config.protocol == "tor")
+                    config.torCountry + "|" + (if (config.torThroughVpn) "1" else "0") else null
+            )
             .putExtra(GozarVpnService.EXTRA_NAME, config.name)
             .putExtra(GozarVpnService.EXTRA_STOP_LABEL, Strings.get(store.lang.value, "disconnect"))
         runCatching { ContextCompat.startForegroundService(this, intent) }

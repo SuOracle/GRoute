@@ -33,6 +33,20 @@ data class ProxyConfig(
     val localAddress: String = "",
     val mtu: Int = 0,
     val reserved: String = "",
+    val aetherMode: String = "masque",
+    val aetherScan: String = "balanced",
+    val aetherNoise: String = "",
+    val aetherHttp2: Boolean = false,
+    val aetherIpv6: Boolean = false,
+    val hyObfs: String = "",
+    val hyObfsPassword: String = "",
+    val hyUpMbps: Int = 0,
+    val hyDownMbps: Int = 0,
+    val allowInsecure: Boolean = false,
+    val torCountry: String = "",
+    val torThroughVpn: Boolean = false,
+    val torBaseId: String = "",
+    val chainId: String = "",
     val source: ConfigSource = ConfigSource.PERSONAL,
     val locked: Boolean = false,
     val id: String = UUID.randomUUID().toString()
@@ -50,6 +64,14 @@ data class ProxyConfig(
         .put("subId", subId)
         .put("privateKey", privateKey).put("localAddress", localAddress)
         .put("mtu", mtu).put("reserved", reserved).put("locked", locked)
+        .put("aetherMode", aetherMode).put("aetherScan", aetherScan)
+        .put("aetherNoise", aetherNoise).put("aetherHttp2", aetherHttp2)
+        .put("aetherIpv6", aetherIpv6)
+        .put("hyObfs", hyObfs).put("hyObfsPassword", hyObfsPassword)
+        .put("hyUpMbps", hyUpMbps).put("hyDownMbps", hyDownMbps)
+        .put("allowInsecure", allowInsecure)
+        .put("torCountry", torCountry).put("torThroughVpn", torThroughVpn)
+        .put("torBaseId", torBaseId).put("chainId", chainId)
 
     companion object {
         fun fromJson(o: JSONObject) = ProxyConfig(
@@ -80,6 +102,20 @@ data class ProxyConfig(
             localAddress = o.optString("localAddress", ""),
             mtu = o.optInt("mtu", 0),
             reserved = o.optString("reserved", ""),
+            aetherMode = o.optString("aetherMode", "masque"),
+            aetherScan = o.optString("aetherScan", "balanced"),
+            aetherNoise = o.optString("aetherNoise", ""),
+            aetherHttp2 = o.optBoolean("aetherHttp2", false),
+            aetherIpv6 = o.optBoolean("aetherIpv6", false),
+            hyObfs = o.optString("hyObfs", ""),
+            hyObfsPassword = o.optString("hyObfsPassword", ""),
+            hyUpMbps = o.optInt("hyUpMbps", 0),
+            hyDownMbps = o.optInt("hyDownMbps", 0),
+            allowInsecure = o.optBoolean("allowInsecure", false),
+            torCountry = o.optString("torCountry", ""),
+            torThroughVpn = o.optBoolean("torThroughVpn", false),
+            torBaseId = o.optString("torBaseId", ""),
+            chainId = o.optString("chainId", ""),
             source = runCatching { ConfigSource.valueOf(o.optString("source", "PERSONAL")) }.getOrDefault(ConfigSource.PERSONAL),
             locked = o.optBoolean("locked", false),
             id = o.optString("id", UUID.randomUUID().toString())

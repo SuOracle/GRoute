@@ -1,7 +1,6 @@
 package net.gozar.app
 
 import android.app.Activity
-import android.app.Application
 import android.os.Bundle
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -12,7 +11,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-class GozarApplication : Application() {
+class GozarApplication : org.strongswan.android.logic.StrongSwanApplication() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val foreground = MutableStateFlow(false)

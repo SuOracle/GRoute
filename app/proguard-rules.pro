@@ -1,15 +1,38 @@
-# Keep the gomobile bridge and Go runtime classes (accessed via JNI/reflection)
 -keep class gozarcore.** { *; }
 -keep class go.** { *; }
-
-# Keep Xray/Go-generated classes that may be referenced by name
 -keepclassmembers class gozarcore.** { *; }
+-dontwarn gozarcore.**
+-dontwarn go.**
 
-# Gson/JSON config models are built by reflection — keep their fields
+-keep class org.strongswan.android.** { *; }
+-keep interface org.strongswan.android.** { *; }
+-keepclassmembers class org.strongswan.android.** { *; }
+-dontwarn org.strongswan.android.**
+
+-keep class net.gozar.app.GozarApplication { *; }
+-keep class net.gozar.app.GozarVpnService { *; }
+-keep class net.gozar.app.QsTileService { *; }
+
+-keepclasseswithmembernames class * {
+    native <methods>;
+}
+
 -keepclassmembers class net.gozar.app.** {
     <fields>;
 }
 
-# Suppress warnings for the Go-generated code
--dontwarn gozarcore.**
--dontwarn go.**
+-keepclassmembers enum * {
+    public static **[] values();
+    public static ** valueOf(java.lang.String);
+}
+
+-keepattributes Signature, InnerClasses, EnclosingMethod
+-keepattributes RuntimeVisibleAnnotations, AnnotationDefault
+
+-keepclassmembers class * extends android.app.Application {
+    <init>();
+}
+
+-keepclassmembers class * extends android.app.Service {
+    <init>();
+}

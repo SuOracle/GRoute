@@ -1,24 +1,38 @@
--optimizationpasses 5
--allowaccessmodification
--repackageclasses ''
--overloadaggressively
-
--assumenosideeffects class android.util.Log {
-    public static int v(...);
-    public static int d(...);
-    public static int i(...);
-    public static int w(...);
-}
-
--keepclassmembers class net.gozar.app.ConfigFile {
-    private static final int[] P1;
-    private static final int[] P2;
-    private static final int[] P3;
-    private static final int[] P4;
-}
-
 -keep class gozarcore.** { *; }
 -keep class go.** { *; }
+-keepclassmembers class gozarcore.** { *; }
+-dontwarn gozarcore.**
+-dontwarn go.**
 
--keepattributes RuntimeVisibleAnnotations,AnnotationDefault
--dontwarn kotlinx.coroutines.**
+-keep class org.strongswan.android.** { *; }
+-keep interface org.strongswan.android.** { *; }
+-keepclassmembers class org.strongswan.android.** { *; }
+-dontwarn org.strongswan.android.**
+
+-keep class net.gozar.app.GozarApplication { *; }
+-keep class net.gozar.app.GozarVpnService { *; }
+-keep class net.gozar.app.QsTileService { *; }
+
+-keepclasseswithmembernames class * {
+    native <methods>;
+}
+
+-keepclassmembers class net.gozar.app.** {
+    <fields>;
+}
+
+-keepclassmembers enum * {
+    public static **[] values();
+    public static ** valueOf(java.lang.String);
+}
+
+-keepattributes Signature, InnerClasses, EnclosingMethod
+-keepattributes RuntimeVisibleAnnotations, AnnotationDefault
+
+-keepclassmembers class * extends android.app.Application {
+    <init>();
+}
+
+-keepclassmembers class * extends android.app.Service {
+    <init>();
+}
