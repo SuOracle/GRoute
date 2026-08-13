@@ -31,6 +31,10 @@ val VazirTypography: Typography = Typography().run {
     )
 }
 
+val MonoFont = FontFamily(
+    Font(R.font.droid_sans_mono, FontWeight.Normal)
+)
+
 val LexendFont = FontFamily(
     Font(R.font.lexend_thin, FontWeight.Thin),
     Font(R.font.lexend_extralight, FontWeight.ExtraLight),

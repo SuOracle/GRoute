@@ -4636,7 +4636,7 @@ private fun NetRadarRow(site: NetMonitor.Site, st: NetMonitor.State) {
         Column(Modifier.weight(1f)) {
             Text(mixedText(site.name), style = MaterialTheme.typography.bodyMedium)
             Text(
-                scriptRuns(site.host, FontFamily.Monospace),
+                scriptRuns(site.host, MonoFont),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -6354,7 +6354,7 @@ private fun LogsScreen(store: ConfigStore, modifier: Modifier = Modifier) {
                         Text(
                             logs,
                             style = MaterialTheme.typography.bodySmall,
-                            fontFamily = FontFamily.Monospace,
+                            fontFamily = MonoFont,
                             textAlign = TextAlign.Left,
                             modifier = Modifier.fillMaxSize()
                                 .verticalScroll(rememberScrollState())
@@ -8362,27 +8362,70 @@ private fun SubscriptionHeader(
                 Spacer(Modifier.height(6.dp))
                 UsageBar(used = sub.used, total = sub.total)
             }
-            val usage = usageText(sub, lang)
-            if (usage != null) {
-                Spacer(Modifier.height(4.dp))
-                Text(usage, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            val quota = quotaChips(sub, lang)
+            if (quota.isNotEmpty()) {
+                Spacer(Modifier.height(7.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    quota.forEach { (label, level) ->
+                        QuotaChip(label, level)
+                    }
+                }
             }
         }
     }
 }
 
-private fun usageText(sub: Subscription, lang: Lang): String? {
-    if (sub.total <= 0 && sub.expire <= 0) return null
-    val parts = mutableListOf<String>()
+private fun quotaChips(sub: Subscription, lang: Lang): List<Pair<String, Int>> {
+    if (sub.total <= 0 && sub.expire <= 0) return emptyList()
+    val parts = mutableListOf<Pair<String, Int>>()
     if (sub.total > 0) {
         val remaining = (sub.total - sub.used).coerceAtLeast(0)
-        parts.add("${formatBytes(remaining, lang)} ${Strings.get(lang, "of")} ${formatBytes(sub.total, lang)} ${Strings.get(lang, "left")}")
+        val frac = remaining.toFloat() / sub.total
+        val level = when {
+            frac <= 0.10f -> 2
+            frac <= 0.30f -> 1
+            else -> 0
+        }
+        parts.add(
+            "${formatBytes(remaining, lang)} ${Strings.get(lang, "of")} " +
+                    "${formatBytes(sub.total, lang)} ${Strings.get(lang, "left")}" to level
+        )
     }
     if (sub.expire > 0) {
         val daysLeft = (sub.expire * 1000 - System.currentTimeMillis()) / 86_400_000L
-        if (daysLeft >= 0) parts.add("${Strings.get(lang, "expires_in")} ${localizeDigits("$daysLeft", lang)}${Strings.get(lang, "unit_days")}")
+        if (daysLeft >= 0) {
+            val level = when {
+                daysLeft <= 1L -> 2
+                daysLeft <= 3L -> 1
+                else -> 0
+            }
+            parts.add(
+                "${Strings.get(lang, "expires_in")} " +
+                        "${localizeDigits("$daysLeft", lang)}${Strings.get(lang, "unit_days")}" to level
+            )
+        }
     }
-    return parts.joinToString("  •  ")
+    return parts
+}
+
+@Composable
+private fun QuotaChip(label: String, level: Int) {
+    val accent = when (level) {
+        2 -> Color(0xFFE53935)
+        1 -> Color(0xFFF59E0B)
+        else -> MaterialTheme.colorScheme.primary
+    }
+    Text(
+        mixedText(label),
+        style = MaterialTheme.typography.labelSmall,
+        color = accent,
+        maxLines = 1,
+        modifier = Modifier
+            .clip(RoundedCornerShape(9.dp))
+            .background(accent.copy(alpha = 0.10f))
+            .border(1.dp, accent.copy(alpha = 0.28f), RoundedCornerShape(9.dp))
+            .padding(horizontal = 9.dp, vertical = 4.dp)
+    )
 }
 
 @Composable
@@ -9089,11 +9132,11 @@ private fun buzz(context: Context) {
 
 @Composable
 internal fun monoFont(): FontFamily =
-    if (LocalLang.current == Lang.FA) VazirFont else FontFamily.Monospace
+    if (LocalLang.current == Lang.FA) VazirFont else MonoFont
 
 @Composable
 internal fun monoLatinFont(): FontFamily =
-    if (LocalLang.current == Lang.FA) LexendFont else FontFamily.Monospace
+    if (LocalLang.current == Lang.FA) LexendFont else MonoFont
 
 @Composable
 internal fun monoText(text: String): AnnotatedString =
