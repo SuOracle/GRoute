@@ -52,7 +52,14 @@ jobs:
       - name: Generate strongSwan built sources
         run: |
           cd strongswan
-          ./autogen.sh
+          chmod -R +x scripts
+          find . -name "*.sh" -exec chmod +x {} +
+          chmod +x autogen.sh
+          VER=$(grep -oP 'AC_INIT\(\[strongSwan\],\s*\[\K[^]]+' configure.ac | head -1)
+          echo "strongSwan version: ${VER:-UNKNOWN}"
+          if [ -n "$VER" ]; then echo "$VER" > .tarball-git-version; fi
+          sh ./autogen.sh
+          chmod +x configure
           ./configure \
             --disable-defaults \
             --enable-monolithic \
