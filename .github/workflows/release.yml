@@ -43,37 +43,30 @@ jobs:
           echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_ROOT=$ANDROID_SDK_ROOT/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
 
-      - name: Install strongSwan build tools
+      - name: Verify strongSwan generated sources
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            autoconf automake libtool pkg-config gperf bison flex perl python3
-
-      - name: Generate strongSwan built sources
-        run: |
-          cd strongswan
-          chmod -R +x scripts
-          find . -name "*.sh" -exec chmod +x {} +
-          chmod +x autogen.sh
-          VER=$(grep -oP 'AC_INIT\(\[strongSwan\],\s*\[\K[^]]+' configure.ac | head -1)
-          echo "strongSwan version: ${VER:-UNKNOWN}"
-          if [ -n "$VER" ]; then echo "$VER" > .tarball-git-version; fi
-          sh ./autogen.sh
-          chmod +x configure
-          ./configure \
-            --disable-defaults \
-            --enable-monolithic \
-            --enable-static \
-            --enable-openssl \
-            --enable-ikev1 \
-            --enable-ikev2
-          make -C src/libstrongswan BUILT_SOURCES
-          echo "--- generated ---"
-          ls -l src/libstrongswan/asn1/oid.c src/libstrongswan/asn1/oid.h
-          ls -l src/libstrongswan/crypto/proposal/proposal_keywords_static.c
-
-      - name: Remove host config.h
-        run: rm -f strongswan/config.h
+          missing=0
+          for f in \
+            strongswan/src/libstrongswan/asn1/oid.c \
+            strongswan/src/libstrongswan/asn1/oid.h \
+            strongswan/src/libstrongswan/crypto/proposal/proposal_keywords_static.c \
+            strongswan/src/libstrongswan/crypto/proposal/proposal_keywords_static.h \
+            strongswan/src/libstrongswan/settings/settings_parser.c \
+            strongswan/src/libstrongswan/settings/settings_parser.h \
+            strongswan/src/libstrongswan/settings/settings_lexer.c \
+            strongswan/Android.common.mk \
+            strongswan/src/frontends/android/app/src/main/jni/openssl/Android.mk
+          do
+            if [ ! -f "$f" ]; then
+              echo "::error::missing generated source: $f"
+              missing=1
+            fi
+          done
+          if [ "$missing" = "1" ]; then
+            echo "::error::Generate these locally and commit with 'git add -f'."
+            exit 1
+          fi
+          echo "All strongSwan generated sources present."
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
