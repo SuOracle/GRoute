@@ -1,0 +1,12 @@
+moon::iptables-restore < /etc/iptables.rules
+sun::iptables-restore < /etc/iptables.rules
+moon::ip link add xfrm-moon type xfrm if_id 42 dev eth0
+moon::ip link set xfrm-moon up
+moon::ip route add 10.2.0.0/16 dev xfrm-moon
+moon::iptables -A FORWARD -i xfrm-moon -j ACCEPT
+moon::iptables -A FORWARD -o xfrm-moon -j ACCEPT
+moon::systemctl start strongswan
+sun::systemctl start strongswan
+moon::expect-connection gw-gw
+sun::expect-connection gw-gw
+moon::swanctl --initiate --child net-net

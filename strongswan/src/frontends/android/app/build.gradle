@@ -1,0 +1,57 @@
+apply plugin: 'com.android.application'
+
+android {
+    namespace = 'org.strongswan.android'
+
+    defaultConfig {
+        applicationId "org.strongswan.android"
+        compileSdk = 36
+        minSdkVersion 21
+        targetSdkVersion 36
+
+        versionCode 96
+        versionName "2.6.2"
+
+        externalNativeBuild {
+            ndkBuild {
+                arguments '-j' + Runtime.runtime.availableProcessors()
+            }
+        }
+    }
+
+    ndkVersion = "27.3.13750724"
+
+    externalNativeBuild {
+        ndkBuild {
+            path 'src/main/jni/Android.mk'
+        }
+    }
+
+    tasks.withType(JavaCompile).configureEach {
+        compileTask ->
+            options.compilerArgs << "-Xlint:unchecked" << "-Xlint:deprecation"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.txt'
+        }
+    }
+    compileOptions {
+        targetCompatibility 1.8
+        sourceCompatibility 1.8
+    }
+}
+
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.7.1'
+    implementation 'androidx.core:core:1.17.0'
+    implementation 'androidx.lifecycle:lifecycle-process:2.9.4'
+    implementation 'androidx.preference:preference:1.2.1'
+    implementation 'androidx.localbroadcastmanager:localbroadcastmanager:1.1.0'
+    implementation 'com.google.android.material:material:1.13.0'
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.assertj:assertj-core:3.27.6'
+    testImplementation 'org.mockito:mockito-core:5.20.0'
+}

@@ -1,0 +1,15 @@
+name: Cache cleanup
+
+on: delete
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-slim
+    permissions:
+      actions: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        # github.ref for deletes is the default branch, so we get the ref from
+        # the event, which is not the full ref
+        run: gh cache delete --repo ${{ github.repository }} -r refs/heads/${{ github.event.ref }} --all --succeed-on-no-caches

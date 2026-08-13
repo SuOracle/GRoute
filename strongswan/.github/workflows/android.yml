@@ -1,0 +1,85 @@
+name: Android
+
+on: [push, pull_request]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CCACHE_BASEDIR: ${{ github.workspace }}
+  CCACHE_COMPRESS: true
+  CCACHE_MAXSIZE: 150M
+  EVICT_CCACHE_AGE: 1200s
+  CC: gcc
+  OS_NAME: linux
+
+jobs:
+  pre-check:
+    runs-on: ubuntu-latest
+    outputs:
+      should_skip: ${{ steps.skip-check.outputs.should_skip }}
+    steps:
+      - id: skip-check
+        uses: fkirc/skip-duplicate-actions@master
+        with:
+          concurrent_skipping: 'same_content_newer'
+
+  android:
+    needs: pre-check
+    if: ${{ needs.pre-check.outputs.should_skip != 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    env:
+      TEST: android
+      # since the NDK might be newly installed, we have to use this to avoid cache misses
+      CCACHE_COMPILERCHECK: content
+    steps:
+      - uses: actions/checkout@v6
+      # make sure the NDK we reference is installed and exported so we can use it to build OpenSSL
+      - name: Install NDK
+        id: ndk-install
+        run: |
+          NDK_VERSION=$(grep "ndkVersion" src/frontends/android/app/build.gradle | sed -e 's/.*"\(.*\)"/\1/')
+          echo Using NDK ${NDK_VERSION}
+          yes | ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager --install "ndk;${NDK_VERSION}"
+          echo "ANDROID_NDK_ROOT=${ANDROID_HOME}/ndk/${NDK_VERSION}" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v5
+        id: cache-restore
+        with:
+          path: ~/.cache/ccache
+          key: ccache-android
+      # necessary for newer versions of the Gradle plugin
+      - uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: 17
+          cache: 'gradle'
+      - run: |
+          sudo apt-get install -qq ccache
+          echo "PATH=/usr/lib/ccache:$PATH" >> $GITHUB_ENV
+          ccache -z
+      - uses: ./.github/actions/default
+        env:
+          ANDROID_NDK_ROOT: ${{ steps.ndk-install.outputs.ANDROID_NDK_ROOT }}
+      - run: ccache -sv
+      - uses: actions/upload-artifact@v6
+        with:
+          name: Lint Results
+          path: src/frontends/android/app/build/reports/lint-results*.xml
+      - if: github.event_name == 'push'
+        run: |
+          ccache --evict-older-than ${{ env.EVICT_CCACHE_AGE }}
+          ccache -sv
+      # delete old cache entry as we currently can't update it any other way
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        if: github.event_name == 'push' && steps.cache-restore.outputs.cache-hit
+        continue-on-error: true
+        run: gh cache delete -r ${{ github.ref }} ${{ steps.cache-restore.outputs.cache-primary-key }}
+      - if: github.event_name == 'push'
+        uses: actions/cache/save@v5
+        with:
+          path: ~/.cache/ccache
+          key: ${{ steps.cache-restore.outputs.cache-primary-key }}

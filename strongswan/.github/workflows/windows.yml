@@ -1,0 +1,144 @@
+name: Windows
+
+on: [push, pull_request]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TESTS_REDUCED_KEYLENGTHS: yes
+  CCACHE_COMPRESS: true
+  CCACHE_MAXSIZE: 100M
+  # since the compilers are newly installed every time, we have to use this to
+  # avoid cache misses
+  CCACHE_COMPILERCHECK: content
+  EVICT_CCACHE_AGE: 1200s
+  MONOLITHIC: yes
+
+jobs:
+  pre-check:
+    runs-on: ubuntu-latest
+    outputs:
+      should_skip: ${{ steps.skip-check.outputs.should_skip }}
+    steps:
+      - id: skip-check
+        uses: fkirc/skip-duplicate-actions@master
+        with:
+          concurrent_skipping: 'same_content_newer'
+
+  cross-compile:
+    needs: pre-check
+    if: ${{ needs.pre-check.outputs.should_skip != 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    strategy:
+      matrix:
+        test: [ win64, win32 ]
+    env:
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      OS_NAME: linux
+      TEST: ${{ matrix.test }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/cache/restore@v5
+        id: cache-restore
+        with:
+          path: ~/.cache/ccache
+          key: ccache-${{ runner.os }}-${{ matrix.test }}
+      - run: |
+          sudo apt-get install -qq ccache
+          echo "PATH=/usr/lib/ccache:$PATH" >> $GITHUB_ENV
+          ccache -sz
+      - uses: ./.github/actions/default
+      - run: ccache -sv
+      - if: github.event_name == 'push'
+        run: |
+          ccache --evict-older-than ${{ env.EVICT_CCACHE_AGE }}
+          ccache -sv
+      # delete old cache entry as we currently can't update it any other way
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        if: github.event_name == 'push' && steps.cache-restore.outputs.cache-hit
+        continue-on-error: true
+        run: gh cache delete -r ${{ github.ref }} ${{ steps.cache-restore.outputs.cache-primary-key }}
+      - if: github.event_name == 'push'
+        uses: actions/cache/save@v5
+        with:
+          path: ~/.cache/ccache
+          key: ${{ steps.cache-restore.outputs.cache-primary-key }}
+      - if: ${{ failure() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: Logs ${{ github.job }}
+          path: config.log
+          retention-days: 5
+
+  native:
+    needs: pre-check
+    if: ${{ needs.pre-check.outputs.should_skip != 'true' }}
+    runs-on: windows-latest
+    permissions:
+      actions: write
+    strategy:
+      matrix:
+        include:
+          - msystem: mingw64
+            arch: x86_64
+            test: win64
+          - msystem: mingw32
+            arch: i686
+            test: win32
+    env:
+      OS_NAME: windows
+      TEST: ${{ matrix.test }}
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: ${{ matrix.msystem }}
+      - run: git config --global core.autocrlf input
+        shell: bash
+      - uses: actions/checkout@v6
+      - uses: actions/cache/restore@v5
+        id: cache-restore
+        with:
+          path: ~\AppData\Local\ccache
+          key: ccache-${{ runner.os }}-${{ matrix.test }}
+      - run: |
+          pacman --noconfirm -S --needed mingw-w64-${{ matrix.arch }}-ccache
+          ccache -sz
+      - run: ./scripts/test.sh deps
+      # GITHUB_ENV doesn't work, so set PATH here
+      - name: Build and run tests
+        run: |
+          PATH=/${{ matrix.msystem }}/lib/ccache/bin:$PATH
+          ./scripts/test.sh
+        # sometimes streaming/threading tests hang completely
+        timeout-minutes: 30
+      - run: ccache -sv
+      - if: github.event_name == 'push'
+        run: |
+          ccache --evict-older-than ${{ env.EVICT_CCACHE_AGE }}
+          ccache -sv
+      # delete old cache entry as we currently can't update it any other way
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        if: github.event_name == 'push' && steps.cache-restore.outputs.cache-hit
+        continue-on-error: true
+        run: gh cache delete -r ${{ github.ref }} ${{ steps.cache-restore.outputs.cache-primary-key }}
+        shell: bash
+      - if: github.event_name == 'push'
+        uses: actions/cache/save@v5
+        with:
+          path: ~\AppData\Local\ccache
+          key: ${{ steps.cache-restore.outputs.cache-primary-key }}
+      - if: ${{ failure() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: Logs ${{ github.job }}
+          path: config.log
+          retention-days: 5

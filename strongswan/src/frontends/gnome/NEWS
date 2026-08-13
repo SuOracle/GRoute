@@ -1,0 +1,137 @@
+NetworkManager-strongswan-1.6.5
+-------------------------------
+
+- Add Georgian translation
+
+NetworkManager-strongswan-1.6.4
+-------------------------------
+
+- Fixes regarding CVE-2025-9615
+
+NetworkManager-strongswan-1.6.3
+-------------------------------
+
+- Fix configure/linker issue when not using GNU libtool
+- Update URL in metainfo
+
+NetworkManager-strongswan-1.6.2
+-------------------------------
+
+- Add support to configure local and remote traffic selectors
+
+NetworkManager-strongswan-1.6.1
+-------------------------------
+
+- Migrated from intltool to gettext
+- Remove dependency on gnome-common
+
+NetworkManager-strongswan-1.6.0
+-------------------------------
+
+- Support for GTK 4
+- Removed libnm-glib compatibility
+
+NetworkManager-strongswan-1.5.2
+-------------------------------
+
+- Reduce height of config dialog by moving options/proposals to tabs
+- Migrated appdata to metainfo (renamed and moved the file)
+
+NetworkManager-strongswan-1.5.1
+-------------------------------
+
+- Fixes password entry for private keys
+
+NetworkManager-strongswan-1.5.0
+-------------------------------
+
+- EAP-TLS authentication
+- Certificate source (file, agent, smartcard) is selectable independently
+- Add support to configure local and remote identities
+- Support configuring a custom server port
+- Show hint regarding password storage policy
+- Replaced the term "gateway" with "server"
+- Fixes build issues due to use of deprecated GLib macros/functions
+- Updated Glade file to GTK 3.2
+
+NetworkManager-strongswan-1.4.5
+-------------------------------
+
+- Enables the IPv6 tab in the connection dialog
+
+NetworkManager-strongswan-1.4.4
+-------------------------------
+
+- Fixed paths when building without libnm-glib
+- Fixed proposal tooltips and updated German translation
+
+NetworkManager-strongswan-1.4.3
+-------------------------------
+
+- Add option to disable libnm-glib compatibility
+
+NetworkManager-strongswan-1.4.2
+-------------------------------
+
+- Add support to configure IKE/ESP proposals
+- Explicitly prevent PIN from getting stored
+
+NetworkManager-strongswan-1.4.1
+-------------------------------
+
+- Fixed several build issues
+
+NetworkManager-strongswan-1.4.0
+-------------------------------
+
+- Updated to NetworkManager 1.2
+- Updated dependencies (GTK+, libnm, libnma)
+- GUI updated (password widget, not hiding credential widgets)
+
+NetworkManager-strongswan-1.3.2
+-------------------------------
+
+- GUI fix
+- Update to libsecret
+- D-Bus policy moved to charon-nm
+
+NetworkManager-strongswan-1.3.1
+-------------------------------
+
+- Add PSK support
+- Updated German translation
+
+NetworkManager-strongswan-1.3.0
+-------------------------------
+
+- Updated to NetworkManager 0.9
+
+NetworkManager-strongswan-1.2.0
+-------------------------------
+
+- Added Smartcard support
+
+NetworkManager-strongswan-1.1.2
+-------------------------------
+
+- Additionally look for libnm-glib[-vpn] pkgconfig packages during configure
+- Tooltips are translatable
+- Update German translation
+
+NetworkManager-strongswan-1.1.1
+-------------------------------
+
+- Implemented save_secrets(), fixes crash when saving connections
+
+NetworkManager-strongswan-1.1.0
+-------------------------------
+
+- updated to NetworkManager 7.1 API
+
+- requires >= strongswan-4.1.13
+
+
+NetworkManager-strongswan-1.0.0
+-------------------------------
+
+- First release

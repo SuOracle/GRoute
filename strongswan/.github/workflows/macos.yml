@@ -1,0 +1,75 @@
+name: macOS
+
+on: [push, pull_request]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TESTS_REDUCED_KEYLENGTHS: yes
+  CCACHE_BASEDIR: ${{ github.workspace }}
+  CCACHE_COMPRESS: true
+  CCACHE_MAXSIZE: 100M
+  EVICT_CCACHE_AGE: 1200s
+  OS_NAME: macos
+
+jobs:
+  pre-check:
+    runs-on: ubuntu-latest
+    outputs:
+      should_skip: ${{ steps.skip-check.outputs.should_skip }}
+    steps:
+      - id: skip-check
+        uses: fkirc/skip-duplicate-actions@master
+        with:
+          concurrent_skipping: 'same_content_newer'
+
+  macos:
+    strategy:
+      matrix:
+        os: [macos-latest, macos-14]
+    needs: pre-check
+    if: ${{ needs.pre-check.outputs.should_skip != 'true' }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    permissions:
+      actions: write
+    env:
+      TEST: macos
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/cache/restore@v5
+        id: cache-restore
+        with:
+          path: ~/Library/Caches/ccache
+          key: ccache-${{ runner.os }}
+      # workaround for conflict between Python installed in the image and via brew
+      - run: find /usr/local/bin -lname '*/Library/Frameworks/Python.framework/*' -delete -print
+      - run: |
+          brew install ccache
+          echo "PATH=$(brew --prefix)/opt/ccache/libexec:$PATH" >> $GITHUB_ENV
+          ccache -z
+      - uses: ./.github/actions/default
+      - run: ccache -sv
+      - if: github.event_name == 'push'
+        run: |
+          ccache --evict-older-than ${{ env.EVICT_CCACHE_AGE }}
+          ccache -sv
+      # delete old cache entry as we currently can't update it any other way
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        if: github.event_name == 'push' && steps.cache-restore.outputs.cache-hit
+        continue-on-error: true
+        run: gh cache delete -r ${{ github.ref }} ${{ steps.cache-restore.outputs.cache-primary-key }}
+      - if: github.event_name == 'push'
+        uses: actions/cache/save@v5
+        with:
+          path: ~/Library/Caches/ccache
+          key: ${{ steps.cache-restore.outputs.cache-primary-key }}
+      - if: ${{ failure() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: Logs ${{ github.job }}
+          path: config.log
+          retention-days: 5

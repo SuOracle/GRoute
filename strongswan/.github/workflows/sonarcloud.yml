@@ -1,0 +1,86 @@
+name: SonarCloud
+
+on: [push]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CCACHE_BASEDIR: ${{ github.workspace }}
+  CCACHE_COMPRESS: true
+  CCACHE_MAXSIZE: 100M
+  EVICT_CCACHE_AGE: 1200s
+  OS_NAME: linux
+
+jobs:
+  pre-check:
+    runs-on: ubuntu-latest
+    outputs:
+      should_skip: ${{ steps.skip-check.outputs.should_skip }}
+    steps:
+      - id: skip-check
+        uses: fkirc/skip-duplicate-actions@master
+        with:
+          concurrent_skipping: 'same_content_newer'
+
+  sonarcloud:
+    needs: pre-check
+    if: ${{ needs.pre-check.outputs.should_skip != 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    env:
+      TEST: sonarcloud
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - run: ./scripts/test.sh deps
+      - uses: actions/cache/restore@v5
+        with:
+          path: ~/.cache/ccache
+          key: ccache-deps-ubuntu-latest-gcc-all
+      - run: |
+          sudo apt-get install -qq ccache
+          echo "PATH=/usr/lib/ccache:$PATH" >> $GITHUB_ENV
+          ccache -z
+      - run: ./scripts/test.sh build-deps
+      - run: ccache -sv
+      - run: rm -rf ~/.cache/ccache
+      - uses: actions/cache/restore@v5
+        id: cache-restore
+        with:
+          path: ~/.cache/ccache
+          key: ccache-sonarcloud
+      - run: ccache -z
+      - uses: SonarSource/sonarqube-scan-action/install-build-wrapper@v8.2.0
+      - run: |
+          echo "BUILD_WRAPPER_OUT_DIR=$HOME/bw-output" >> $GITHUB_ENV
+      - run: ./scripts/test.sh
+      - uses: SonarSource/sonarqube-scan-action@v8.2.0
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.projectKey=${{ secrets.SONAR_PROJECT }}
+            -Dsonar.organization=${{ secrets.SONAR_ORGANIZATION }}
+            -Dsonar.cfamily.threads=4
+            -Dsonar.cfamily.taintAnalysis=false
+            -Dsonar.cfamily.compile-commands=${{ env.BUILD_WRAPPER_OUT_DIR }}/compile_commands.json
+      - run: ccache -sv
+      - if: github.event_name == 'push'
+        run: |
+          ccache --evict-older-than ${{ env.EVICT_CCACHE_AGE }}
+          ccache -sv
+      # delete old cache entry as we currently can't update it any other way
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        if: github.event_name == 'push' && steps.cache-restore.outputs.cache-hit
+        continue-on-error: true
+        run: gh cache delete -r ${{ github.ref }} ${{ steps.cache-restore.outputs.cache-primary-key }}
+      - if: github.event_name == 'push'
+        uses: actions/cache/save@v5
+        with:
+          path: ~/.cache/ccache
+          key: ${{ steps.cache-restore.outputs.cache-primary-key }}

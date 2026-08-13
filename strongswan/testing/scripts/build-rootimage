@@ -1,0 +1,8 @@
+#!/bin/bash
+
+echo "Building root image"
+
+DIR=$(dirname `readlink -f $0`)
+. $DIR/../testing.conf
+
+$DIR/build-strongswan --all --replace --no-guests --tarball $SWANVERSION

@@ -1,0 +1,2 @@
+moon::systemctl stop strongswan
+sun::systemctl stop strongswan

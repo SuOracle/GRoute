@@ -1,0 +1,6 @@
+moon::systemctl start strongswan
+carol::systemctl start strongswan
+moon::expect-connection finance
+moon::expect-connection sales
+carol::expect-connection home
+carol::swanctl --initiate --child home 2> /dev/null

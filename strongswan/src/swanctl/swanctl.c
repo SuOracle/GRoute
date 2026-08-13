@@ -1,0 +1,135 @@
+/*
+ * Copyright (C) 2018-2026 Tobias Brunner
+ * Copyright (C) 2014 Martin Willi
+ *
+ * Copyright (C) secunet Security Networks AG
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation; either version 2 of the License, or (at your
+ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+ * for more details.
+ */
+
+#include "swanctl.h"
+#include "command.h"
+
+#include <unistd.h>
+
+#include <library.h>
+#include <selectors/sec_label.h>
+
+/*
+ * Described in header
+ */
+char *swanctl_dir;
+
+/*
+ * Described in header
+ */
+settings_t *load_swanctl_conf(char *file)
+{
+	settings_t *cfg;
+	char buf[PATH_MAX];
+
+	if (!file)
+	{
+		if (!strlen(swanctl_dir))
+		{
+			free(swanctl_dir);
+			swanctl_dir = strdup(getcwd(buf, sizeof(buf)));
+		}
+		file = buf;
+		snprintf(buf, sizeof(buf), "%s%s%s", swanctl_dir,
+				 DIRECTORY_SEPARATOR, SWANCTL_CONF);
+	}
+
+	cfg = settings_create(file);
+	if (!cfg)
+	{
+		fprintf(stderr, "parsing '%s' failed\n", file);
+		return NULL;
+	}
+	free(swanctl_dir);
+	swanctl_dir = path_dirname(file);
+	return cfg;
+}
+
+/*
+ * Described in header
+ */
+void print_label(const char *prefix, const char *value)
+{
+	sec_label_t *label;
+	chunk_t encoding;
+
+	if (value)
+	{
+		encoding = chunk_from_hex(chunk_from_str((char*)value), NULL);
+		label = sec_label_from_encoding(encoding);
+		if (label)
+		{
+			printf("%s%s\n", prefix, label->get_string(label));
+			label->destroy(label);
+		}
+		chunk_free(&encoding);
+	}
+}
+
+/**
+ * Cleanup library atexit()
+ */
+static void cleanup()
+{
+	free(swanctl_dir);
+	lib->processor->cancel(lib->processor);
+	library_deinit();
+}
+
+/**
+ * Library initialization and operation parsing
+ */
+int main(int argc, char *argv[])
+{
+	level_t level;
+	int status;
+
+	status = command_init(argc, argv);
+	if (status)
+	{
+		return status;
+	}
+	atexit(cleanup);
+	if (!library_init(NULL, "swanctl"))
+	{
+		exit(SS_RC_LIBSTRONGSWAN_INTEGRITY);
+	}
+	if (lib->integrity &&
+		!lib->integrity->check_file(lib->integrity, "swanctl", argv[0]))
+	{
+		fprintf(stderr, "integrity check of swanctl failed\n");
+		exit(SS_RC_DAEMON_INTEGRITY);
+	}
+	if (!lib->plugins->load(lib->plugins,
+			lib->settings->get_str(lib->settings, "swanctl.load", PLUGINS)))
+	{
+		exit(SS_RC_INITIALIZATION_FAILED);
+	}
+
+	swanctl_dir = strdup(getenv("SWANCTL_DIR") ?: SWANCTLDIR);
+
+	/* suppress log message when spawning threads by default */
+	level = dbg_default_get_level_group(DBG_JOB);
+	if (level == 1)
+	{
+		dbg_default_set_level_group(DBG_JOB, 0);
+	}
+	lib->processor->set_threads(lib->processor, 4);
+	dbg_default_set_level_group(DBG_JOB, level);
+
+	return command_dispatch();
+}

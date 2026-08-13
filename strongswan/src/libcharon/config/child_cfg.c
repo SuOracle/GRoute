@@ -1,0 +1,720 @@
+/*
+ * Copyright (C) 2008-2025 Tobias Brunner
+ * Copyright (C) 2016 Andreas Steffen
+ * Copyright (C) 2005-2007 Martin Willi
+ * Copyright (C) 2005 Jan Hutter
+ *
+ * Copyright (C) secunet Security Networks AG
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation; either version 2 of the License, or (at your
+ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+ * for more details.
+ */
+
+#include "child_cfg.h"
+
+#include <stdint.h>
+
+#include <daemon.h>
+
+ENUM_FLAGS(action_names, ACTION_TRAP, ACTION_START,
+	"none",
+	"trap",
+	"start",
+);
+
+/** Default replay window size, if not set using charon.replay_window */
+#define DEFAULT_REPLAY_WINDOW 32
+
+typedef struct private_child_cfg_t private_child_cfg_t;
+
+/**
+ * Private data of an child_cfg_t object
+ */
+struct private_child_cfg_t {
+
+	/**
+	 * Public part
+	 */
+	child_cfg_t public;
+
+	/**
+	 * Number of references hold by others to this child_cfg
+	 */
+	refcount_t refcount;
+
+	/**
+	 * Name of the child_cfg, used to query it
+	 */
+	char *name;
+
+	/**
+	 * Options
+	 */
+	child_cfg_option_t options;
+
+	/**
+	 * list for all proposals
+	 */
+	linked_list_t *proposals;
+
+	/**
+	 * list for traffic selectors for my site
+	 */
+	traffic_selector_list_t *my_ts;
+
+	/**
+	 * list for traffic selectors for others site
+	 */
+	traffic_selector_list_t *other_ts;
+
+	/**
+	 * updown script
+	 */
+	char *updown;
+
+	/**
+	 * Mode to propose for a initiated CHILD: tunnel/transport
+	 */
+	ipsec_mode_t mode;
+
+	/**
+	 * action to take to start CHILD_SA
+	 */
+	action_t start_action;
+
+	/**
+	 * action to take on DPD
+	 */
+	action_t dpd_action;
+
+	/**
+	 * action to take on CHILD_SA close
+	 */
+	action_t close_action;
+
+	/**
+	 * CHILD_SA lifetime config
+	 */
+	lifetime_cfg_t lifetime;
+
+	/**
+	 * Inactivity timeout
+	 */
+	uint32_t inactivity;
+
+	/**
+	 * Reqid to install CHILD_SA with
+	 */
+	uint32_t reqid;
+
+	/**
+	 * Optional interface ID to use for inbound CHILD_SA
+	 */
+	uint32_t if_id_in;
+
+	/**
+	 * Optional interface ID to use for outbound CHILD_SA
+	 */
+	uint32_t if_id_out;
+
+	/**
+	 * Optional mark to install inbound CHILD_SA with
+	 */
+	mark_t mark_in;
+
+	/**
+	 * Optional mark to install outbound CHILD_SA with
+	 */
+	mark_t mark_out;
+
+	/**
+	 * Optional mark to set to packets after inbound processing
+	 */
+	mark_t set_mark_in;
+
+	/**
+	 * Optional mark to set to packets after outbound processing
+	 */
+	mark_t set_mark_out;
+
+	/**
+	 * Optional security label for policies
+	 */
+	sec_label_t *label;
+
+	/**
+	 * Optional label mode for policies
+	 */
+	sec_label_mode_t label_mode;
+
+	/**
+	 * Traffic Flow Confidentiality padding, if enabled
+	 */
+	uint32_t tfc;
+
+	/**
+	 * Optional manually-set IPsec policy priorities
+	 */
+	uint32_t manual_prio;
+
+	/**
+	 * Optional restriction of IPsec policy to a given network interface
+	 */
+	char *interface;
+
+	/**
+	 * anti-replay window size
+	 */
+	uint32_t replay_window;
+
+	/**
+	 * HW offload mode
+	 */
+	hw_offload_t hw_offload;
+
+	/**
+	 * DS header field copy mode
+	 */
+	dscp_copy_t copy_dscp;
+};
+
+METHOD(child_cfg_t, get_name, char*,
+	private_child_cfg_t *this)
+{
+	return this->name;
+}
+
+METHOD(child_cfg_t, has_option, bool,
+	private_child_cfg_t *this, child_cfg_option_t option)
+{
+	return this->options & option;
+}
+
+METHOD(child_cfg_t, add_proposal, void,
+	private_child_cfg_t *this, proposal_t *proposal)
+{
+	if (proposal)
+	{
+		this->proposals->insert_last(this->proposals, proposal);
+	}
+}
+
+CALLBACK(match_proposal, bool,
+	proposal_t *item, va_list args)
+{
+	proposal_t *proposal;
+
+	VA_ARGS_VGET(args, proposal);
+	return item->equals(item, proposal);
+}
+
+METHOD(child_cfg_t, get_proposals, linked_list_t*,
+	private_child_cfg_t *this, bool strip_ke, bool log)
+{
+	enumerator_t *enumerator;
+	proposal_t *current;
+	proposal_selection_flag_t flags = 0;
+	linked_list_t *proposals = linked_list_create();
+
+	if (strip_ke)
+	{
+		flags |= PROPOSAL_SKIP_KE;
+	}
+
+	enumerator = this->proposals->create_enumerator(this->proposals);
+	while (enumerator->enumerate(enumerator, &current))
+	{
+		current = current->clone(current, flags);
+		if (proposals->find_first(proposals, match_proposal, NULL, current))
+		{
+			current->destroy(current);
+			continue;
+		}
+		proposals->insert_last(proposals, current);
+	}
+	enumerator->destroy(enumerator);
+
+	if (log)
+	{
+		DBG2(DBG_CFG, "configured proposals: %#P", proposals);
+	}
+	return proposals;
+}
+
+METHOD(child_cfg_t, select_proposal, proposal_t*,
+	private_child_cfg_t*this, linked_list_t *proposals,
+	proposal_selection_flag_t flags)
+{
+	return proposal_select(this->proposals, proposals, flags);
+}
+
+METHOD(child_cfg_t, add_traffic_selector, void,
+	private_child_cfg_t *this, bool local, traffic_selector_t *ts)
+{
+	if (local)
+	{
+		this->my_ts->add(this->my_ts, ts);
+	}
+	else
+	{
+		this->other_ts->add(this->other_ts, ts);
+	}
+}
+
+/**
+ * Check whether the config is for regular transport mode.
+ */
+static bool is_transport_mode(private_child_cfg_t *this)
+{
+	return this->mode == MODE_TRANSPORT && !has_option(this, OPT_PROXY_MODE);
+}
+
+METHOD(child_cfg_t, get_traffic_selectors, linked_list_t*,
+	private_child_cfg_t *this, bool local, linked_list_t *hosts)
+{
+	traffic_selector_list_t *ts = local ? this->my_ts : this->other_ts;
+
+	/* force replacing non-dynamic TS to the IPs in transport mode */
+	return ts->get(ts, hosts, is_transport_mode(this));
+}
+
+/*
+ * Described in header
+ */
+linked_list_t *child_cfg_select_ts(child_cfg_t *cfg, bool local,
+								   traffic_selector_list_t *list,
+								   linked_list_t *supplied, linked_list_t *hosts)
+{
+	private_child_cfg_t *this = (private_child_cfg_t*)cfg;
+	traffic_selector_list_t *ts = list ?: (local ? this->my_ts : this->other_ts);
+	linked_list_t *result;
+	bool force, narrowed = FALSE;
+
+	DBG2(DBG_CFG, "%s traffic selectors for %s:",
+		 supplied ? "selecting" : "proposing", local ? "us" : "other");
+
+	/* force replacing non-dynamic TS to the IPs in transport mode, but only
+	 * when proposing as initiator */
+	force = !supplied && is_transport_mode(this);
+
+	result = ts->select(ts, supplied, hosts, force, &narrowed);
+	if (narrowed)
+	{
+		charon->bus->alert(charon->bus, ALERT_TS_NARROWED,
+						   local, result, this);
+	}
+	return result;
+}
+
+METHOD(child_cfg_t, select_traffic_selectors, linked_list_t*,
+	private_child_cfg_t *this, bool local, linked_list_t *supplied,
+	linked_list_t *hosts)
+{
+	return child_cfg_select_ts(&this->public, local, NULL, supplied, hosts);
+}
+
+METHOD(child_cfg_t, get_updown, char*,
+	private_child_cfg_t *this)
+{
+	return this->updown;
+}
+
+/**
+ * Applies jitter to the rekey value. Returns the new rekey value.
+ * Note: The distribution of random values is not perfect, but it
+ * should get the job done.
+ */
+static uint64_t apply_jitter(uint64_t rekey, uint64_t jitter)
+{
+	if (jitter == 0)
+	{
+		return rekey;
+	}
+	jitter = (jitter == UINT64_MAX) ? jitter : jitter + 1;
+	return rekey - (uint64_t)(min(jitter, rekey) * (random() / (RAND_MAX + 1.0)));
+}
+#define APPLY_JITTER(l) l.rekey = apply_jitter(l.rekey, l.jitter)
+
+METHOD(child_cfg_t, get_lifetime, lifetime_cfg_t*,
+	private_child_cfg_t *this, bool jitter)
+{
+	lifetime_cfg_t *lft = malloc_thing(lifetime_cfg_t);
+	memcpy(lft, &this->lifetime, sizeof(lifetime_cfg_t));
+	if (!jitter)
+	{
+		lft->time.jitter = lft->bytes.jitter = lft->packets.jitter = 0;
+	}
+	APPLY_JITTER(lft->time);
+	APPLY_JITTER(lft->bytes);
+	APPLY_JITTER(lft->packets);
+	return lft;
+}
+
+METHOD(child_cfg_t, get_mode, ipsec_mode_t,
+	private_child_cfg_t *this)
+{
+	return this->mode;
+}
+
+METHOD(child_cfg_t, get_start_action, action_t,
+	private_child_cfg_t *this)
+{
+	return this->start_action;
+}
+
+METHOD(child_cfg_t, get_hw_offload, hw_offload_t,
+	private_child_cfg_t *this)
+{
+	return this->hw_offload;
+}
+
+METHOD(child_cfg_t, get_copy_dscp, dscp_copy_t,
+	private_child_cfg_t *this)
+{
+	return this->copy_dscp;
+}
+
+METHOD(child_cfg_t, get_dpd_action, action_t,
+	private_child_cfg_t *this)
+{
+	return this->dpd_action;
+}
+
+METHOD(child_cfg_t, get_close_action, action_t,
+	private_child_cfg_t *this)
+{
+	return this->close_action;
+}
+
+METHOD(child_cfg_t, get_algorithm, uint16_t,
+	private_child_cfg_t *this, transform_type_t type)
+{
+	enumerator_t *enumerator;
+	proposal_t *proposal;
+	uint16_t alg = 0;
+
+	enumerator = this->proposals->create_enumerator(this->proposals);
+	while (enumerator->enumerate(enumerator, &proposal))
+	{
+		if (proposal->get_algorithm(proposal, type, &alg, NULL))
+		{
+			break;
+		}
+	}
+	enumerator->destroy(enumerator);
+	return alg;
+}
+
+METHOD(child_cfg_t, get_inactivity, uint32_t,
+	private_child_cfg_t *this)
+{
+	return this->inactivity;
+}
+
+METHOD(child_cfg_t, get_reqid, uint32_t,
+	private_child_cfg_t *this)
+{
+	return this->reqid;
+}
+
+METHOD(child_cfg_t, get_if_id, uint32_t,
+	private_child_cfg_t *this, bool inbound)
+{
+	return inbound ? this->if_id_in : this->if_id_out;
+}
+
+METHOD(child_cfg_t, get_mark, mark_t,
+	private_child_cfg_t *this, bool inbound)
+{
+	return inbound ? this->mark_in : this->mark_out;
+}
+
+METHOD(child_cfg_t, get_set_mark, mark_t,
+	private_child_cfg_t *this, bool inbound)
+{
+	return inbound ? this->set_mark_in : this->set_mark_out;
+}
+
+METHOD(child_cfg_t, get_label, sec_label_t*,
+	private_child_cfg_t *this)
+{
+	return this->label;
+}
+
+METHOD(child_cfg_t, get_label_mode, sec_label_mode_t,
+	private_child_cfg_t *this)
+{
+	return this->label_mode;
+}
+
+METHOD(child_cfg_t, select_label, bool,
+	private_child_cfg_t *this, linked_list_t *labels, bool log,
+	sec_label_t **label, bool *exact_out)
+{
+	enumerator_t *enumerator;
+	sec_label_t *current, *match = NULL;
+	bool exact = FALSE;
+
+	if (labels && labels->get_count(labels))
+	{
+		if (!this->label)
+		{
+			DBG2(DBG_CFG, "peer proposed a security label, but none expected");
+			return FALSE;
+		}
+		if (log)
+		{
+			DBG2(DBG_CFG, "selecting security label matching '%s':",
+				 this->label->get_string(this->label));
+		}
+		enumerator = labels->create_enumerator(labels);
+		while (enumerator->enumerate(enumerator, &current))
+		{
+			if (this->label->equals(this->label, current))
+			{
+				if (log)
+				{
+					DBG2(DBG_CFG, " %s => matches exactly",
+						 current->get_string(current));
+				}
+				match = current;
+				exact = TRUE;
+				break;
+			}
+			else if (this->label_mode == SEC_LABEL_MODE_SELINUX &&
+					 this->label->matches(this->label, current))
+			{
+				if (log)
+				{
+					DBG2(DBG_CFG, " %s => matches%s",
+						 current->get_string(current), match ? ", ignored" : "");
+				}
+				/* return the first match if we don't find an exact one */
+				if (!match)
+				{
+					match = current;
+				}
+			}
+			else if (log)
+			{
+				DBG2(DBG_CFG, " %s => no match", current->get_string(current));
+			}
+		}
+		enumerator->destroy(enumerator);
+		if (!match)
+		{
+			DBG2(DBG_CFG, "none of the proposed security labels match the "
+				 "configured label '%s'", this->label->get_string(this->label));
+			return FALSE;
+		}
+	}
+	else if (this->label)
+	{
+		DBG2(DBG_CFG, "peer didn't propose any security labels, we expect one "
+			 "matching '%s'", this->label->get_string(this->label));
+		return FALSE;
+	}
+
+	if (label)
+	{
+		*label = match;
+	}
+	if (exact_out)
+	{
+		*exact_out = exact;
+	}
+	return TRUE;
+}
+
+METHOD(child_cfg_t, get_tfc, uint32_t,
+	private_child_cfg_t *this)
+{
+	return this->tfc;
+}
+
+METHOD(child_cfg_t, get_manual_prio, uint32_t,
+	private_child_cfg_t *this)
+{
+	return this->manual_prio;
+}
+
+METHOD(child_cfg_t, get_interface, char*,
+	private_child_cfg_t *this)
+{
+	return this->interface;
+}
+
+METHOD(child_cfg_t, get_replay_window, uint32_t,
+	private_child_cfg_t *this)
+{
+	return this->replay_window;
+}
+
+METHOD(child_cfg_t, set_replay_window, void,
+	private_child_cfg_t *this, uint32_t replay_window)
+{
+	this->replay_window = replay_window;
+}
+
+#define LT_PART_EQUALS(a, b) ({ a.life == b.life && a.rekey == b.rekey && a.jitter == b.jitter; })
+#define LIFETIME_EQUALS(a, b) ({ LT_PART_EQUALS(a.time, b.time) && LT_PART_EQUALS(a.bytes, b.bytes) && LT_PART_EQUALS(a.packets, b.packets); })
+
+METHOD(child_cfg_t, equals, bool,
+	private_child_cfg_t *this, child_cfg_t *other_pub)
+{
+	private_child_cfg_t *other = (private_child_cfg_t*)other_pub;
+
+	if (this == other)
+	{
+		return TRUE;
+	}
+	if (this->public.equals != other->public.equals)
+	{
+		return FALSE;
+	}
+	if (!this->proposals->equals_offset(this->proposals, other->proposals,
+										offsetof(proposal_t, equals)))
+	{
+		return FALSE;
+	}
+	if (!this->my_ts->equals(this->my_ts, other->my_ts) ||
+		!this->other_ts->equals(this->other_ts, other->other_ts))
+	{
+		return FALSE;
+	}
+	return this->options == other->options &&
+		this->mode == other->mode &&
+		this->start_action == other->start_action &&
+		this->dpd_action == other->dpd_action &&
+		this->close_action == other->close_action &&
+		LIFETIME_EQUALS(this->lifetime, other->lifetime) &&
+		this->inactivity == other->inactivity &&
+		this->reqid == other->reqid &&
+		this->if_id_in == other->if_id_in &&
+		this->if_id_out == other->if_id_out &&
+		this->mark_in.value == other->mark_in.value &&
+		this->mark_in.mask == other->mark_in.mask &&
+		this->mark_out.value == other->mark_out.value &&
+		this->mark_out.mask == other->mark_out.mask &&
+		this->set_mark_in.value == other->set_mark_in.value &&
+		this->set_mark_in.mask == other->set_mark_in.mask &&
+		this->set_mark_out.value == other->set_mark_out.value &&
+		this->set_mark_out.mask == other->set_mark_out.mask &&
+		this->tfc == other->tfc &&
+		this->manual_prio == other->manual_prio &&
+		this->replay_window == other->replay_window &&
+		this->hw_offload == other->hw_offload &&
+		this->copy_dscp == other->copy_dscp &&
+		streq(this->updown, other->updown) &&
+		streq(this->interface, other->interface) &&
+		sec_labels_equal(this->label, other->label) &&
+		this->label_mode == other->label_mode;
+}
+
+METHOD(child_cfg_t, get_ref, child_cfg_t*,
+	private_child_cfg_t *this)
+{
+	ref_get(&this->refcount);
+	return &this->public;
+}
+
+METHOD(child_cfg_t, destroy, void,
+	private_child_cfg_t *this)
+{
+	if (ref_put(&this->refcount))
+	{
+		this->proposals->destroy_offset(this->proposals, offsetof(proposal_t, destroy));
+		this->my_ts->destroy(this->my_ts);
+		this->other_ts->destroy(this->other_ts);
+		DESTROY_IF(this->label);
+		free(this->updown);
+		free(this->interface);
+		free(this->name);
+		free(this);
+	}
+}
+
+/*
+ * Described in header-file
+ */
+child_cfg_t *child_cfg_create(char *name, child_cfg_create_t *data)
+{
+	private_child_cfg_t *this;
+
+	INIT(this,
+		.public = {
+			.get_name = _get_name,
+			.add_traffic_selector = _add_traffic_selector,
+			.get_traffic_selectors = _get_traffic_selectors,
+			.select_traffic_selectors = _select_traffic_selectors,
+			.add_proposal = _add_proposal,
+			.get_proposals = _get_proposals,
+			.select_proposal = _select_proposal,
+			.get_updown = _get_updown,
+			.get_mode = _get_mode,
+			.get_start_action = _get_start_action,
+			.get_dpd_action = _get_dpd_action,
+			.get_close_action = _get_close_action,
+			.get_lifetime = _get_lifetime,
+			.get_algorithm = _get_algorithm,
+			.get_inactivity = _get_inactivity,
+			.get_reqid = _get_reqid,
+			.get_if_id = _get_if_id,
+			.get_mark = _get_mark,
+			.get_set_mark = _get_set_mark,
+			.get_label = _get_label,
+			.get_label_mode = _get_label_mode,
+			.select_label = _select_label,
+			.get_tfc = _get_tfc,
+			.get_manual_prio = _get_manual_prio,
+			.get_interface = _get_interface,
+			.get_replay_window = _get_replay_window,
+			.set_replay_window = _set_replay_window,
+			.has_option = _has_option,
+			.equals = _equals,
+			.get_ref = _get_ref,
+			.destroy = _destroy,
+			.get_hw_offload = _get_hw_offload,
+			.get_copy_dscp = _get_copy_dscp,
+		},
+		.name = strdup(name),
+		.options = data->options,
+		.updown = strdupnull(data->updown),
+		.reqid = data->reqid,
+		.if_id_in = data->if_id_in,
+		.if_id_out = data->if_id_out,
+		.mode = data->mode,
+		.start_action = data->start_action,
+		.dpd_action = data->dpd_action,
+		.close_action = data->close_action,
+		.mark_in = data->mark_in,
+		.mark_out = data->mark_out,
+		.set_mark_in = data->set_mark_in,
+		.set_mark_out = data->set_mark_out,
+		.label = data->label ? data->label->clone(data->label) : NULL,
+		.label_mode = data->label_mode != SEC_LABEL_MODE_SYSTEM ?
+								data->label_mode : sec_label_mode_default(),
+		.lifetime = data->lifetime,
+		.inactivity = data->inactivity,
+		.tfc = data->tfc,
+		.manual_prio = data->priority,
+		.interface = strdupnull(data->interface),
+		.refcount = 1,
+		.proposals = linked_list_create(),
+		.my_ts = traffic_selector_list_create(),
+		.other_ts = traffic_selector_list_create(),
+		.replay_window = lib->settings->get_int(lib->settings,
+							"%s.replay_window", DEFAULT_REPLAY_WINDOW, lib->ns),
+		.hw_offload = data->hw_offload,
+		.copy_dscp = data->copy_dscp,
+	);
+
+	return &this->public;
+}

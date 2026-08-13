@@ -1,0 +1,247 @@
+/*
+ * Copyright (C) 2008 Martin Willi
+ *
+ * Copyright (C) secunet Security Networks AG
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation; either version 2 of the License, or (at your
+ * option) any later version.  See <http://www.fsf.org/copyleft/gpl.txt>.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+ * or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
+ * for more details.
+ */
+
+#include <stdint.h>
+
+#include "credential_factory.h"
+
+#include <utils/debug.h>
+#include <collections/linked_list.h>
+#include <threading/thread_value.h>
+#include <threading/rwlock.h>
+#include <credentials/certificates/x509.h>
+#include <credentials/containers/container.h>
+
+/**
+ * Maximum depth/recursion before failing to create a credential.
+ */
+#define CREATE_MAX_DEPTH 10
+
+ENUM(credential_type_names, CRED_PRIVATE_KEY, CRED_CONTAINER,
+	"CRED_PRIVATE_KEY",
+	"CRED_PUBLIC_KEY",
+	"CRED_CERTIFICATE",
+	"CRED_CONTAINER",
+);
+
+typedef struct private_credential_factory_t private_credential_factory_t;
+
+/**
+ * private data of credential_factory
+ */
+struct private_credential_factory_t {
+
+	/**
+	 * public functions
+	 */
+	credential_factory_t public;
+
+	/**
+	 * list with entry_t
+	 */
+	linked_list_t *constructors;
+
+	/**
+	 * Thread specific recursiveness counter
+	 */
+	thread_value_t *recursive;
+
+	/**
+	 * lock access to builders
+	 */
+	rwlock_t *lock;
+};
+
+typedef struct entry_t entry_t;
+struct entry_t {
+	/** kind of credential builder */
+	credential_type_t type;
+	/** subtype of credential, e.g. certificate_type_t */
+	int subtype;
+	/** registered with final flag? */
+	bool final;
+	/** plugin that registered this algorithm */
+	const char *plugin_name;
+	/** builder function */
+	builder_function_t constructor;
+};
+
+METHOD(credential_factory_t, add_builder, void,
+	private_credential_factory_t *this, credential_type_t type, int subtype,
+	bool final, const char *plugin_name, builder_function_t constructor)
+{
+	entry_t *entry = malloc_thing(entry_t);
+
+	entry->type = type;
+	entry->subtype = subtype;
+	entry->final = final;
+	entry->plugin_name = plugin_name;
+	entry->constructor = constructor;
+	this->lock->write_lock(this->lock);
+	this->constructors->insert_last(this->constructors, entry);
+	this->lock->unlock(this->lock);
+}
+
+METHOD(credential_factory_t, remove_builder, void,
+	private_credential_factory_t *this, builder_function_t constructor)
+{
+	enumerator_t *enumerator;
+	entry_t *entry;
+
+	this->lock->write_lock(this->lock);
+	enumerator = this->constructors->create_enumerator(this->constructors);
+	while (enumerator->enumerate(enumerator, &entry))
+	{
+		if (entry->constructor == constructor)
+		{
+			this->constructors->remove_at(this->constructors, enumerator);
+			free(entry);
+		}
+	}
+	enumerator->destroy(enumerator);
+	this->lock->unlock(this->lock);
+}
+
+METHOD(credential_factory_t, create, void*,
+	private_credential_factory_t *this, credential_type_t type, int subtype, ...)
+{
+	enumerator_t *enumerator;
+	entry_t *entry;
+	va_list args;
+	void *construct = NULL;
+	int failures DBG_UNUSED = 0;
+	uintptr_t level;
+	enum_name_t *names DBG_UNUSED;
+
+	switch (type)
+	{
+		case CRED_CERTIFICATE:
+			names = certificate_type_names;
+			break;
+		case CRED_CONTAINER:
+			names = container_type_names;
+			break;
+		case CRED_PRIVATE_KEY:
+		case CRED_PUBLIC_KEY:
+		default:
+			names = key_type_names;
+			break;
+	}
+
+	level = (uintptr_t)this->recursive->get(this->recursive);
+	if (level >= CREATE_MAX_DEPTH)
+	{
+		DBG1(DBG_LIB, "building %N - %N failed, reached depth limit (%d)",
+			 credential_type_names, type, names, subtype, CREATE_MAX_DEPTH);
+		return NULL;
+	}
+	this->recursive->set(this->recursive, (void*)level + 1);
+
+	this->lock->read_lock(this->lock);
+	/* push this in case of a timeout during unit tests */
+	thread_cleanup_push((thread_cleanup_t)this->lock->unlock, this->lock);
+	enumerator = this->constructors->create_enumerator(this->constructors);
+	while (enumerator->enumerate(enumerator, &entry))
+	{
+		if (entry->type == type && entry->subtype == subtype)
+		{
+			DBG2(DBG_LIB, "builder L%d %N - %N of plugin '%s'",
+				 (int)level, credential_type_names, type, names, subtype,
+				 entry->plugin_name);
+			va_start(args, subtype);
+			construct = entry->constructor(subtype, args);
+			va_end(args);
+			if (construct)
+			{
+				break;
+			}
+			failures++;
+		}
+	}
+	enumerator->destroy(enumerator);
+	thread_cleanup_pop(TRUE);
+
+	if (!construct && !level)
+	{
+		DBG1(DBG_LIB, "building %N - %N failed, tried %d builders",
+			 credential_type_names, type, names, subtype, failures);
+	}
+	this->recursive->set(this->recursive, (void*)level);
+	return construct;
+}
+
+CALLBACK(builder_filter, bool,
+	void *null, enumerator_t *orig, va_list args)
+{
+	entry_t *entry;
+	credential_type_t *type;
+	int *subtype;
+
+	VA_ARGS_VGET(args, type, subtype);
+
+	while (orig->enumerate(orig, &entry))
+	{
+		if (entry->final)
+		{
+			*type = entry->type;
+			*subtype = entry->subtype;
+			return TRUE;
+		}
+	}
+	return FALSE;
+}
+
+METHOD(credential_factory_t, create_builder_enumerator, enumerator_t*,
+	private_credential_factory_t *this)
+{
+	this->lock->read_lock(this->lock);
+	return enumerator_create_filter(
+				this->constructors->create_enumerator(this->constructors),
+				builder_filter, this->lock, (void*)this->lock->unlock);
+}
+
+METHOD(credential_factory_t, destroy, void,
+	private_credential_factory_t *this)
+{
+	this->constructors->destroy_function(this->constructors, free);
+	this->recursive->destroy(this->recursive);
+	this->lock->destroy(this->lock);
+	free(this);
+}
+
+/*
+ * see header file
+ */
+credential_factory_t *credential_factory_create()
+{
+	private_credential_factory_t *this;
+
+	INIT(this,
+		.public = {
+			.create = _create,
+			.create_builder_enumerator = _create_builder_enumerator,
+			.add_builder = _add_builder,
+			.remove_builder = _remove_builder,
+			.destroy = _destroy,
+		},
+		.constructors = linked_list_create(),
+		.recursive = thread_value_create(NULL),
+		.lock = rwlock_create(RWLOCK_TYPE_DEFAULT),
+	);
+
+	return &this->public;
+}
+

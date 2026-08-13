@@ -1,0 +1,390 @@
+name: Linux
+
+on: [push, pull_request]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # this test case does not actually test anything but tries to access system
+  # directories that might be inaccessible on build hosts
+  TESTS_CASES_EXCLUDE: sw_collector
+  TESTS_REDUCED_KEYLENGTHS: yes
+  CCACHE_BASEDIR: ${{ github.workspace }}
+  CCACHE_COMPRESS: true
+  CCACHE_MAXSIZE: 100M
+  EVICT_CCACHE_AGE: 1200s
+  OS_NAME: linux
+
+jobs:
+  pre-check:
+    runs-on: ubuntu-latest
+    outputs:
+      should_skip: ${{ steps.skip-check.outputs.should_skip }}
+    steps:
+      - id: skip-check
+        uses: fkirc/skip-duplicate-actions@master
+        with:
+          concurrent_skipping: 'same_content_newer'
+
+  latest:
+    needs: pre-check
+    if: ${{ needs.pre-check.outputs.should_skip != 'true' }}
+    runs-on: ${{ matrix.os || 'ubuntu-latest' }}
+    permissions:
+      actions: write
+    strategy:
+      fail-fast: false
+      matrix:
+        test: [ all, default, printf-builtin ]
+        compiler: [ gcc, clang ]
+        monolithic: [ no, yes ]
+        exclude:
+          # monolithic builds don't affect the printf-hook implementation
+          - test: printf-builtin
+            monolithic: yes
+        include:
+          - test: apidoc
+          - test: coverage
+          - test: dist
+          - test: ld
+            leak-detective: yes
+          - test: nm
+          - test: no-dbg
+          - test: no-dbg
+            compiler: clang
+          - test: no-testable-ke
+          - test: no-testable-ke
+            compiler: clang
+          - test: fuzzing
+            compiler: clang
+            monolithic: yes
+    env:
+      LEAK_DETECTIVE: ${{ matrix.leak-detective || 'no' }}
+      MONOLITHIC: ${{ matrix.monolithic || 'no' }}
+      CC: ${{ matrix.compiler || 'gcc' }}
+      TEST: ${{ matrix.test }}
+      # as several jobs use the same key, make sure we only store the cache for
+      # one specific config in case there is a race
+      STORE_DEPS_CACHE: >-
+        ${{
+          github.event_name == 'push' &&
+          matrix.test == 'all' &&
+          matrix.monolithic == 'no'
+        }}
+      STORE_CACHE: >-
+        ${{
+          github.event_name == 'push' &&
+          !contains(fromJSON('["apidoc"]'), matrix.test) &&
+          (!contains(fromJSON('["all", "default", "printf-builtin"]'),
+                     matrix.test) || matrix.monolithic == 'no')
+        }}
+      # with regards to ccache, monolithic builds don't differ from regular builds.
+      # but most tests use different compiler flags, so we use separate caches
+      CACHE_KEY: >-
+        ${{ case(contains(fromJSON('["apidoc"]'), matrix.test),
+              'ccache-ubuntu-latest-gcc-default',
+              format('ccache-ubuntu-latest-{0}-{1}', matrix.compiler || 'gcc',
+                     matrix.test)) }}
+    steps:
+      - uses: actions/checkout@v6
+      - run: ./scripts/test.sh deps
+      - uses: actions/cache/restore@v5
+        id: deps-cache-restore
+        with:
+          path: ~/.cache/ccache
+          key: ccache-deps-ubuntu-latest-${{ env.CC }}-all
+      - run: |
+          sudo apt-get install -qq ccache
+          echo "PATH=/usr/lib/ccache:$PATH" >> $GITHUB_ENV
+          ccache -z
+      - run: ./scripts/test.sh build-deps
+      - run: ccache -sv
+      - if: fromJSON(env.STORE_DEPS_CACHE)
+        run: |
+          ccache --evict-older-than ${{ env.EVICT_CCACHE_AGE }}
+          ccache -sv
+      # delete old cache entry as we currently can't update it any other way
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        if: steps.deps-cache-restore.outputs.cache-hit && fromJSON(env.STORE_DEPS_CACHE)
+        continue-on-error: true
+        run: gh cache delete -r ${{ github.ref }} ${{ steps.deps-cache-restore.outputs.cache-primary-key }}
+      - if: fromJSON(env.STORE_DEPS_CACHE)
+        uses: actions/cache/save@v5
+        with:
+          path: ~/.cache/ccache
+          key: ${{ steps.deps-cache-restore.outputs.cache-primary-key }}
+      - run: rm -rf ~/.cache/ccache
+      - uses: actions/cache/restore@v5
+        id: cache-restore
+        with:
+          path: ~/.cache/ccache
+          key: ${{ env.CACHE_KEY }}
+      - run: ccache -z
+      - run: ./scripts/test.sh
+      - run: ccache -sv
+      - if: fromJSON(env.STORE_CACHE)
+        run: |
+          ccache --evict-older-than ${{ env.EVICT_CCACHE_AGE }}
+          ccache -sv
+      # delete old cache entry as we currently can't update it any other way
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        if: steps.cache-restore.outputs.cache-hit && fromJSON(env.STORE_CACHE)
+        continue-on-error: true
+        run: gh cache delete -r ${{ github.ref }} ${{ steps.cache-restore.outputs.cache-primary-key }}
+      - if: fromJSON(env.STORE_CACHE)
+        uses: actions/cache/save@v5
+        with:
+          path: ~/.cache/ccache
+          key: ${{ steps.cache-restore.outputs.cache-primary-key }}
+      - if: ${{ success() && matrix.test == 'coverage' }}
+        uses: codecov/codecov-action@v4
+        with:
+          disable_search: true
+          fail_ci_if_error: true
+          file: coverage/coverage.cleaned.info
+          token: ${{ secrets.CODECOV_TOKEN }}
+          verbose: true
+      - if: ${{ failure() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: Logs ${{ github.job }}
+          path: config.log
+          retention-days: 5
+
+  crypto:
+    needs: pre-check
+    if: ${{ needs.pre-check.outputs.should_skip != 'true' }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      actions: write
+    strategy:
+      fail-fast: false
+      matrix:
+        test: [ botan, wolfssl, openssl-sys, openssl-3, openssl-4, openssl-awslc ]
+        os: [ ubuntu-latest, ubuntu-22.04 ]
+        exclude:
+          # test custom-built libs only on the latest platform
+          - os: ubuntu-22.04
+            test: botan
+          - os: ubuntu-22.04
+            test: wolfssl
+          - os: ubuntu-22.04
+            test: openssl-3
+          - os: ubuntu-22.04
+            test: openssl-4
+          - os: ubuntu-22.04
+            test: openssl-awslc
+    env:
+      LEAK_DETECTIVE: ${{ matrix.leak-detective || 'no' }}
+      CC: ${{ matrix.compiler || 'gcc' }}
+      TEST: ${{ matrix.test }}
+      ACTIVE_TRANSFORMS_REF: .github/active-transforms/${{ matrix.test }}
+      # only store a cache for some tests as the others have a minimal diff (if
+      # any) compared to the 'all' build
+      STORE_DEPS_CACHE: >-
+        ${{
+          github.event_name == 'push' &&
+          contains(fromJSON('["openssl-4", "openssl-awslc"]'), matrix.test)
+        }}
+      DEPS_CACHE_KEY: >-
+        ${{
+          case(contains(fromJSON('["openssl-4", "openssl-awslc"]'), matrix.test),
+            format('ccache-deps-{0}-gcc-{1}', matrix.os, matrix.test),
+            format('ccache-deps-{0}-gcc-all', matrix.os))
+        }}
+      CACHE_KEY: >-
+        ${{
+          case(matrix.os == 'ubuntu-latest' && matrix.test == 'openssl-sys',
+            format('ccache-{0}-gcc-default', matrix.os),
+            format('ccache-{0}-gcc-all', matrix.os))
+        }}
+    steps:
+      - uses: actions/checkout@v6
+      - run: ./scripts/test.sh deps
+      - uses: actions/cache/restore@v5
+        id: deps-cache-restore
+        with:
+          path: ~/.cache/ccache
+          key: ${{ env.DEPS_CACHE_KEY }}
+      - run: |
+          sudo apt-get install -qq ccache
+          echo "PATH=/usr/lib/ccache:$PATH" >> $GITHUB_ENV
+          ccache -z
+          echo "TESTS_ACTIVE_TRANSFORMS=$HOME/active-transforms.log" >> $GITHUB_ENV
+      - run: ./scripts/test.sh build-deps
+      - run: ccache -sv
+      - if: fromJSON(env.STORE_DEPS_CACHE)
+        run: |
+          ccache --evict-older-than ${{ env.EVICT_CCACHE_AGE }}
+          ccache -sv
+      # delete old cache entry as we currently can't update it any other way
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        if: steps.deps-cache-restore.outputs.cache-hit && fromJSON(env.STORE_DEPS_CACHE)
+        continue-on-error: true
+        run: gh cache delete -r ${{ github.ref }} ${{ steps.deps-cache-restore.outputs.cache-primary-key }}
+      - if: fromJSON(env.STORE_DEPS_CACHE)
+        uses: actions/cache/save@v5
+        with:
+          path: ~/.cache/ccache
+          key: ${{ steps.deps-cache-restore.outputs.cache-primary-key }}
+      - run: rm -rf ~/.cache/ccache
+      - uses: actions/cache/restore@v5
+        id: cache-restore
+        with:
+          path: ~/.cache/ccache
+          key: ${{ env.CACHE_KEY }}
+      - run: ccache -z
+      - run: ./scripts/test.sh
+      - run: ccache -sv
+      - name: Upload active transforms
+        uses: actions/upload-artifact@v6
+        with:
+          name: active-transforms-${{ matrix.test }}-${{ matrix.os }}
+          path: ${{ env.TESTS_ACTIVE_TRANSFORMS }}
+          retention-days: 5
+      - name: Verify active transforms
+        run: |
+          test ! -f $ACTIVE_TRANSFORMS_REF || diff -us --color=always $ACTIVE_TRANSFORMS_REF $TESTS_ACTIVE_TRANSFORMS
+      - if: ${{ failure() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: Logs ${{ github.job }}
+          path: config.log
+          retention-days: 5
+
+  older:
+    needs: pre-check
+    if: ${{ needs.pre-check.outputs.should_skip != 'true' }}
+    runs-on: ${{ matrix.os }}
+    permissions:
+      actions: write
+    strategy:
+      matrix:
+        os: [ ubuntu-22.04 ]
+        test: [ all, nm ]
+        compiler: [ gcc, clang ]
+        exclude:
+          - test: nm
+            compiler: clang
+    env:
+      LEAK_DETECTIVE: ${{ matrix.leak-detective || 'no' }}
+      CC: ${{ matrix.compiler || 'gcc' }}
+      TEST: ${{ matrix.test }}
+      STORE_DEPS_CACHE: >-
+        ${{
+          github.event_name == 'push' &&
+          matrix.test == 'all'
+        }}
+    steps:
+      - uses: actions/checkout@v6
+      - run: ./scripts/test.sh deps
+      - uses: actions/cache/restore@v5
+        id: deps-cache-restore
+        with:
+          path: ~/.cache/ccache
+          key: ccache-deps-${{ matrix.os }}-${{ env.CC }}-all
+      - run: |
+          sudo apt-get install -qq ccache
+          echo "PATH=/usr/lib/ccache:$PATH" >> $GITHUB_ENV
+          ccache -z
+      - run: ./scripts/test.sh build-deps
+      - run: ccache -sv
+      - if: fromJSON(env.STORE_DEPS_CACHE)
+        run: |
+          ccache --evict-older-than ${{ env.EVICT_CCACHE_AGE }}
+          ccache -sv
+      # delete old cache entry as we currently can't update it any other way
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        if: steps.deps-cache-restore.outputs.cache-hit && fromJSON(env.STORE_DEPS_CACHE)
+        continue-on-error: true
+        run: gh cache delete -r ${{ github.ref }} ${{ steps.deps-cache-restore.outputs.cache-primary-key }}
+      - if: fromJSON(env.STORE_DEPS_CACHE)
+        uses: actions/cache/save@v5
+        with:
+          path: ~/.cache/ccache
+          key: ${{ steps.deps-cache-restore.outputs.cache-primary-key }}
+      - run: rm -rf ~/.cache/ccache
+      - uses: actions/cache/restore@v5
+        id: cache-restore
+        with:
+          path: ~/.cache/ccache
+          key: ccache-${{ matrix.os }}-${{ env.CC }}-${{ matrix.test }}
+      - run: ccache -z
+      - run: ./scripts/test.sh
+      - run: ccache -sv
+      - if: github.event_name == 'push'
+        run: |
+          ccache --evict-older-than ${{ env.EVICT_CCACHE_AGE }}
+          ccache -sv
+      # delete old cache entry as we currently can't update it any other way
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        if: github.event_name == 'push' && steps.cache-restore.outputs.cache-hit
+        continue-on-error: true
+        run: gh cache delete -r ${{ github.ref }} ${{ steps.cache-restore.outputs.cache-primary-key }}
+      - if: github.event_name == 'push'
+        uses: actions/cache/save@v5
+        with:
+          path: ~/.cache/ccache
+          key: ${{ steps.cache-restore.outputs.cache-primary-key }}
+      - if: ${{ failure() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: Logs ${{ github.job }}
+          path: config.log
+          retention-days: 5
+
+  alpine:
+    needs: pre-check
+    if: ${{ needs.pre-check.outputs.should_skip != 'true' }}
+    runs-on: ubuntu-latest
+    container: alpine:latest
+    permissions:
+      actions: write
+    env:
+      TESTS_REDUCED_KEYLENGTHS: yes
+      TEST: alpine
+      OS_NAME: alpine
+    steps:
+      - uses: actions/checkout@v6
+      # install tar and zstd before the cache action that requires them
+      - run: |
+          apk add ccache tar zstd github-cli
+          echo "PATH=/usr/lib/ccache/bin:$PATH" >> $GITHUB_ENV
+      - uses: actions/cache/restore@v5
+        id: cache-restore
+        with:
+          path: ~/.cache/ccache
+          key: ccache-alpine
+      - run: ccache -z
+      # don't use the default action as we don't want to build dependencies or install bash
+      - run: ./scripts/test.sh deps
+      - run: ./scripts/test.sh
+      - run: ccache -sv
+      - if: github.event_name == 'push'
+        run: |
+          ccache --evict-older-than ${{ env.EVICT_CCACHE_AGE }}
+          ccache -sv
+      # delete old cache entry as we currently can't update it any other way
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        if: github.event_name == 'push' && steps.cache-restore.outputs.cache-hit
+        continue-on-error: true
+        run: gh cache delete --repo ${{ github.repository }} -r ${{ github.ref }} ${{ steps.cache-restore.outputs.cache-primary-key }}
+      - if: github.event_name == 'push'
+        uses: actions/cache/save@v5
+        with:
+          path: ~/.cache/ccache
+          key: ${{ steps.cache-restore.outputs.cache-primary-key }}
+      - if: ${{ failure() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: Logs ${{ github.job }}
+          path: config.log
+          retention-days: 5

@@ -1,0 +1,5 @@
+sun::service charon-tkm stop
+sun::killall tkm_keymanager
+sun::rm -f /tmp/tkm.rpc.ike /tmp/tkm.rpc.ees /tmp/tkm.log
+carol::systemctl stop strongswan
+dave::systemctl stop strongswan

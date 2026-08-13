@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright Lubomir Rintel 2016 -->
+<component type="addon">
+  <id>network-manager-strongswan</id>
+  <project_license>GPL-2.0+</project_license>
+  <metadata_license>CC0-1.0</metadata_license>
+  <extends>nm-connection-editor.desktop</extends>
+  <extends>gnome-control-center.desktop</extends>
+  <name>strongSwan VPN client</name>
+  <summary>strongSwan based client for IPsec virtual private networks</summary>
+
+  <keywords>
+    <keyword translate="no">network</keyword>
+    <keyword translate="no">manager</keyword>
+    <keyword translate="no">NetworkManager</keyword>
+    <keyword translate="no">connection</keyword>
+    <keyword translate="no">VPN</keyword>
+    <keyword translate="no">strongSwan</keyword>
+    <keyword translate="no">IPsec</keyword>
+    <keyword translate="no">IKEv2</keyword>
+  </keywords>
+
+  <description>
+    <p>Support for configuring IPsec based virtual private network connections.</p>
+    <p>Compatible with IKEv2 key exchange and multiple authentication mechanisms.</p>
+  </description>
+
+  <screenshots>
+    <screenshot type="default">
+      <image width="800" height="682">https://www.strongswan.org/images/networkmanager-plugin-eap.png</image>
+    </screenshot>
+  </screenshots>
+
+  <url type="homepage">https://docs.strongswan.org/docs/latest/features/networkManager.html</url>
+  <url type="bugtracker">https://github.com/strongswan/strongswan/issues</url>
+  <url type="help">https://www.strongswan.org/support.html</url>
+  <update_contact>info_AT_strongswan.org</update_contact>
+  <translation type="gettext">NetworkManager-strongswan</translation>
+  <developer_name>strongSwan Developers</developer_name>
+</component>

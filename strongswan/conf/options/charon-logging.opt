@@ -1,0 +1,94 @@
+charon.filelog {}
+	Section to define file loggers, see LOGGER CONFIGURATION in
+	**strongswan.conf**(5).
+
+charon.filelog.<name> { # }
+	<name> may be the full path to the log file if it only contains
+	characters permitted in section names. Is ignored if _path_ is specified.
+
+charon.filelog.<name>.path =
+	Optional path to the log file. Overrides the section name. Must be used
+	if the path contains characters that aren't allowed in section names.
+
+charon.filelog.<name>.default = 1
+	Default loglevel.
+
+	Specifies the default loglevel to be used for subsystems for which no
+	specific loglevel is defined.
+
+charon.filelog.<name>.<subsystem> = <default>
+	Loglevel for a specific subsystem.
+
+charon.filelog.<name>.append = yes
+	If this option is enabled log entries are appended to the existing file.
+
+charon.filelog.<name>.flush_line = no
+	Enabling this option disables block buffering and enables line buffering.
+
+charon.filelog.<name>.ike_name = no
+	Add the connection name and a unique numerical identifier for the current
+	IKE_SA to each log entry if available.
+
+charon.filelog.<name>.json = no
+	If enabled, each log entry is written to the file as a JSON object.
+
+	Enables writing each log entry as a JSON object to the file. The properties
+	are "time" (if `time_format` is set), "thread", "group", "level" and "msg".
+	Newlines, double quotes and backslashes are escaped in the latter. If
+	`ike_name` is enabled, "ikesa-uniqueid" and "ikesa-name" are added to the
+	object if available. The `log_level` option does not apply if this is
+	enabled.
+
+charon.filelog.<name>.log_level = no
+	Add the log level of each message after the subsystem (e.g. [IKE2]).
+
+charon.filelog.<name>.time_format
+	Prefix each log entry with a timestamp. The option accepts a format string
+	as passed to **strftime**(3).
+
+charon.filelog.<name>.time_precision =
+	Add the milliseconds (_ms_) or microseconds (_us_) within the current second
+	after the timestamp (separated by a dot, so _time_format_ should end
+	with %S or %T). By default, nothing is added.
+
+charon.syslog {}
+	Section to define syslog loggers, see LOGGER CONFIGURATION in
+	**strongswan.conf**(5).
+
+charon.syslog.identifier
+	Identifier for use with openlog(3).
+
+	Global identifier used for an **openlog**(3) call, prepended to each log
+	message by syslog.  If not configured, **openlog**(3) is not called, so the
+	value will depend on system defaults (often the program name).
+
+charon.syslog.<facility> { # }
+	<facility> is one of the supported syslog facilities, see LOGGER
+	CONFIGURATION in **strongswan.conf**(5).
+
+charon.syslog.<facility>.default = 1
+	Default loglevel.
+
+	Specifies the default loglevel to be used for subsystems for which no
+	specific loglevel is defined.
+
+charon.syslog.<facility>.<subsystem> = <default>
+	Loglevel for a specific subsystem.
+
+charon.syslog.<facility>.ike_name = no
+	Prefix each log entry with the connection name and a unique numerical
+	identifier for each IKE_SA.
+
+charon.syslog.<facility>.log_level = no
+	Add the log level of each message after the subsystem (e.g. [IKE2]).
+
+charon.syslog.<facility>.map_level = -1
+	Map strongSwan specific loglevels to syslog loglevels.
+
+	The default setting of -1 passes all messages to syslog using a log
+	level of LOG_INFO. A non-negative value maps the strongSwan specific
+	loglevels (0..4) to the syslog level starting at the specified number.
+	For example, a value of 5 (LOG_NOTICE) maps strongSwan loglevel 0 to
+	LOG_NOTICE, level 1 to LOG_INFO, and levels 2, 3 and 4 to LOG_DEBUG.
+	This allows (additional) filtering of log messages on the syslog
+	server.

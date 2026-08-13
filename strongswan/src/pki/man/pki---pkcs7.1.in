@@ -1,0 +1,90 @@
+.TH "PKI \-\-PKCS7" 1 "2023-03-30" "@PACKAGE_VERSION@" "strongSwan"
+.
+.SH "NAME"
+.
+pki \-\-pkcs7 \- Provides PKCS#7 wrap/unwrap functions
+.
+.SH "SYNOPSIS"
+.
+.SY pki\ \-\-pkcs7
+.BR \-\-sign | \-\-verify | \-\-encrypt | \-\-decrypt | \-\-show
+.OP \-\-in file
+.OP \-\-cert file
+.OP \-\-key file
+.OP \-\-digest digest
+.OP \-\-rsa\-padding padding
+.OP \-\-debug level
+.YS
+.
+.SY pki\ \-\-pkcs7
+.BI \-\-options\~ file
+.YS
+.
+.SY "pki \-\-pkcs7"
+.B \-h
+|
+.B \-\-help
+.YS
+.
+.SH "DESCRIPTION"
+.
+This sub-command of
+.BR pki (1)
+provides functions to wrap/unwrap PKCS#7 containers.
+.
+.SH "OPTIONS"
+.
+.TP
+.B "\-h, \-\-help"
+Print usage information with a summary of the available options.
+.TP
+.BI "\-v, \-\-debug " level
+Set debug level, default: 1.
+.TP
+.BI "\-+, \-\-options " file
+Read command line options from \fIfile\fR.
+.TP
+.BI "\-s, \-\-sign"
+Create PKCS#7 signed-data.
+.TP
+.BI "\-u, \-\-verify"
+Verify PKCS#7 signed-data.
+.TP
+.BI "\-e, \-\-encrypt"
+Create PKCS#7 enveloped-data.
+.TP
+.BI "\-e, \-\-decrypt"
+Decrypt PKCS#7 enveloped-data.
+.TP
+.BI "\-p, \-\-show"
+Show information about PKCS#7 container, list certificates.
+.TP
+.BI "\-i, \-\-in " file
+PKCS#7 input file. If not given the input is read from \fISTDIN\fR.
+.TP
+.BI "\-k, \-\-key " file
+Private key used for
+.B \-\-sign
+and
+.BR \-\-decrypt.
+.TP
+.BI "\-c, \-\-cert " file
+Certificate for
+.BR \-\-sign ,
+.B \-\-verify
+and
+.BR \-\-encrypt.
+Can be used multiple times.
+.TP
+.BI "\-g, \-\-digest " digest
+Digest to use for signature creation. One of \fImd5\fR, \fIsha1\fR,
+\fIsha224\fR, \fIsha256\fR, \fIsha384\fR, or \fIsha512\fR.  The default is
+determined based on the type and size of the signature key.
+.TP
+.BI "\-R, \-\-rsa\-padding " padding
+Padding to use for RSA signatures. Either \fIpkcs1\fR or \fIpss\fR, defaults
+to \fIpkcs1\fR.
+.
+.SH "SEE ALSO"
+.
+.BR pki (1)

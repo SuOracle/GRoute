@@ -1,0 +1,87 @@
+name: "CodeQL"
+
+on: [push, pull_request]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CCACHE_BASEDIR: ${{ github.workspace }}
+  OS_NAME: linux
+
+jobs:
+  pre-check:
+    runs-on: ubuntu-latest
+    outputs:
+      should_skip: ${{ steps.skip-check.outputs.should_skip }}
+    steps:
+      - id: skip-check
+        uses: fkirc/skip-duplicate-actions@master
+        with:
+          concurrent_skipping: 'same_content_newer'
+
+  analyze:
+    needs: pre-check
+    if: ${{ needs.pre-check.outputs.should_skip != 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [ 'python', 'ruby' ]
+    steps:
+    - uses: actions/checkout@v6
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v4
+      with:
+        languages: ${{ matrix.language }}
+        config-file: ./.github/codeql/config.yml
+        trap-caching: false
+
+    - name: Autobuild
+      uses: github/codeql-action/autobuild@v4
+
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v4
+      with:
+        category: "/language:${{matrix.language}}"
+
+  analyze-cpp:
+    needs: pre-check
+    if: ${{ needs.pre-check.outputs.should_skip != 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      security-events: write
+    env:
+      TEST: codeql
+    steps:
+    - uses: actions/checkout@v6
+    - run: ./scripts/test.sh deps
+    - uses: actions/cache/restore@v5
+      with:
+        path: ~/.cache/ccache
+        key: ccache-deps-ubuntu-latest-gcc-all
+    - run: |
+        sudo apt-get install -qq ccache
+        echo "OLD_PATH=$PATH" >> $GITHUB_ENV
+        echo "PATH=/usr/lib/ccache:$PATH" >> $GITHUB_ENV
+        ccache -z
+    - run: ./scripts/test.sh build-deps
+    - run: ccache -sv
+    - run: echo "PATH=$OLD_PATH" >> $GITHUB_ENV
+
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v4
+      with:
+        languages: cpp
+        config-file: ./.github/codeql/config.yml
+        trap-caching: false
+    - run: ./scripts/test.sh
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v4
+      with:
+        category: "/language:cpp"
