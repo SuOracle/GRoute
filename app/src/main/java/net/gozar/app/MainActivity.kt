@@ -2827,7 +2827,6 @@ private fun ExportConfigScreen(
                 visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
                 shape = RoundedCornerShape(16.dp),
                 textStyle = LocalTextStyle.current.copy(fontFamily = monoLatinFont()),
-<<<<<<< HEAD
                 trailingIcon = {
                     Icon(
                         if (showPassword) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
@@ -2860,33 +2859,6 @@ private fun ExportConfigScreen(
             InfoBox(error, accent = MaterialTheme.colorScheme.error, centered = true)
         }
 
-=======
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            Row(
-                Modifier.fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
-                    .clickable { showPassword = !showPassword }
-                    .padding(vertical = 2.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Checkbox(checked = showPassword, onCheckedChange = { showPassword = it })
-                Text(t("show"), style = MaterialTheme.typography.bodyMedium)
-            }
-        }
-
-        InfoBox(t("export_locked_note"))
-
-        AnimatedVisibility(
-            visible = error.isNotEmpty(),
-            enter = fadeIn(tween(200)) + expandVertically(tween(240, easing = FastOutSlowInEasing)),
-            exit = fadeOut(tween(150)) + shrinkVertically(tween(200, easing = FastOutSlowInEasing))
-        ) {
-            InfoBox(error, accent = MaterialTheme.colorScheme.error, centered = true)
-        }
-
->>>>>>> fc14c0c576a8002c4b0895e8f8a9594bcb926342
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             BounceOutlinedButton(onClick = onCancel, modifier = Modifier.weight(1f)) { Text(t("cancel")) }
             BounceButton(
