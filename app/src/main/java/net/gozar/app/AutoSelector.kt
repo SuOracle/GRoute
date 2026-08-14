@@ -22,7 +22,11 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
-class AutoSelector(private val appContext: Context, private val store: ConfigStore) {
+class AutoSelector(
+    private val appContext: Context,
+    private val store: ConfigStore,
+    private val onSwitch: ((ProxyConfig) -> Unit)? = null
+) {
 
     private var loopJob: Job? = null
 
@@ -30,7 +34,11 @@ class AutoSelector(private val appContext: Context, private val store: ConfigSto
     val results: StateFlow<Map<String, PingResult>> = _results.asStateFlow()
 
     fun start(scope: CoroutineScope) {
-        if (loopJob?.isActive == true) return
+        if (loopJob?.isActive == true) {
+            android.util.Log.d(TAG, "start() ignored, already running")
+            return
+        }
+        android.util.Log.d(TAG, "start()")
         loopJob = scope.launch {
             while (isActive) {
                 runCatching { runOnce() }
@@ -40,6 +48,7 @@ class AutoSelector(private val appContext: Context, private val store: ConfigSto
     }
 
     fun stop() {
+        android.util.Log.d(TAG, "stop()")
         loopJob?.cancel()
         loopJob = null
     }
@@ -47,6 +56,7 @@ class AutoSelector(private val appContext: Context, private val store: ConfigSto
     private suspend fun runOnce() = coroutineScope {
         store.awaitReady()
         val configs = store.configs.value
+        android.util.Log.d(TAG, "runOnce: ${configs.size} configs")
         if (configs.isEmpty()) return@coroutineScope
 
         val marking = _results.value.toMutableMap()
@@ -74,21 +84,38 @@ class AutoSelector(private val appContext: Context, private val store: ConfigSto
         val snapshot = _results.value
         val best = configs
             .mapNotNull { c -> (snapshot[c.id] as? PingResult.Ok)?.let { c to it.ms } }
-            .minByOrNull { it.second } ?: return@coroutineScope
+            .minByOrNull { it.second }
+        if (best == null) {
+            android.util.Log.w(TAG, "no config responded, nothing to switch to")
+            return@coroutineScope
+        }
+        android.util.Log.d(TAG, "best=${best.first.name} ${best.second}ms")
 
         val selectedId = store.selectedId.value
         if (selectedId == null) {
             store.setSelectedId(best.first.id)
             return@coroutineScope
         }
-        if (best.first.id == selectedId) return@coroutineScope
+        if (best.first.id == selectedId) {
+            android.util.Log.d(TAG, "best is already selected")
+            return@coroutineScope
+        }
 
         val currentPing = (snapshot[selectedId] as? PingResult.Ok)?.ms
         val shouldSwitch = currentPing == null || currentPing - best.second >= SWITCH_MARGIN_MS
-        if (!shouldSwitch) return@coroutineScope
+        if (!shouldSwitch) {
+            android.util.Log.d(TAG, "margin too small: current=${currentPing}ms best=${best.second}ms")
+            return@coroutineScope
+        }
 
+        android.util.Log.d(TAG, "switching to ${best.first.name}")
         store.setSelectedId(best.first.id)
-        reconnectIfConnected(best.first)
+        val handler = onSwitch
+        if (handler != null) {
+            withContext(Dispatchers.Main) { handler(best.first) }
+        } else {
+            reconnectIfConnected(best.first)
+        }
     }
 
     private suspend fun reconnectIfConnected(config: ProxyConfig) {
@@ -129,6 +156,7 @@ class AutoSelector(private val appContext: Context, private val store: ConfigSto
     }
 
     private companion object {
+        const val TAG = "GRouteAuto"
         const val INTERVAL_MS = 60_000L
         const val MAX_CONCURRENCY = 4
         const val SWITCH_MARGIN_MS = 40

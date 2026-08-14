@@ -542,7 +542,7 @@ private fun WelcomeScreen(onDone: () -> Unit) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .offset(y = (-40).dp)
-                    .padding(horizontal = 20.dp)
+                    .padding(horizontal = 10.dp)
                     .graphicsLayer {
                         alpha = taglineAlpha
                         translationY = taglineShift
@@ -566,10 +566,12 @@ private fun WelcomeScreen(onDone: () -> Unit) {
                     fontFamily = welcomeFont,
                     color = taglineColor,
                     maxLines = 1,
-                    overflow = TextOverflow.Visible
+                    softWrap = false,
+                    overflow = TextOverflow.Clip,
+                    modifier = Modifier.weight(1f, fill = false)
                 )
                 Text(
-                    text = "  |  ",
+                    text = " | ",
                     style = taglineStyle,
                     fontSize = 16.sp,
                     fontWeight = FontWeight.Bold,
@@ -585,7 +587,9 @@ private fun WelcomeScreen(onDone: () -> Unit) {
                     fontFamily = welcomeFont,
                     color = taglineColor,
                     maxLines = 1,
-                    overflow = TextOverflow.Visible
+                    softWrap = false,
+                    overflow = TextOverflow.Clip,
+                    modifier = Modifier.weight(1f, fill = false)
                 )
                 Spacer(Modifier.width(7.dp))
                 Icon(
@@ -1116,7 +1120,7 @@ private fun GozarApp(
 
     val page = pagerState.currentPage
     val onSettingsTab = page == 3
-    val subScreenOpen = (page == 1 && (showPicker || showManual || showProjects || showTorNodes || showWindscribe || exportConfigs != null)) || (onSettingsTab && (usageDetail || perAppDetail || logsDetail || stabilityDetail || aboutDetail || cleanIpDetail || themeDetail || toolsDetail || connDetail || prefsDetail || netMonDetail || netCatDetail || netCatIndex >= 0 || checkHostDetail))
+    val subScreenOpen = (page == 1 && (showPicker || showManual || showProjects || showTorNodes || showWindscribe || showScanner || exportConfigs != null)) || (onSettingsTab && (usageDetail || perAppDetail || logsDetail || stabilityDetail || aboutDetail || cleanIpDetail || themeDetail || toolsDetail || connDetail || prefsDetail || netMonDetail || netCatDetail || netCatIndex >= 0 || checkHostDetail))
 
     val screenKey = when {
         page == 0 -> "shop"
@@ -1151,6 +1155,7 @@ private fun GozarApp(
             exportConfigs != null -> exportConfigs = null
             showManual -> { showManual = false; editingConfig = null }
             showWindscribe -> showWindscribe = false
+            showScanner -> showScanner = false
             showTorNodes -> showTorNodes = false
             showProjects -> showProjects = false
             showPicker -> showPicker = false
@@ -1362,6 +1367,7 @@ private fun GozarApp(
                 val connKey = when {
                     exportConfigs != null -> "export"
                     showManual -> "manual"
+                    showScanner -> "scanqr"
                     showWindscribe -> "windscribe"
                     showTorNodes -> "tornodes"
                     showProjects -> "projects"
@@ -3274,7 +3280,9 @@ private fun FreeProjectsScreen(
     LaunchedEffect(status) { if (status.isNotEmpty()) { delay(4000); status = "" } }
 
     Column(
-        modifier.fillMaxSize().padding(16.dp),
+        modifier.fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Card(
@@ -3402,7 +3410,13 @@ private fun FreeProjectsScreen(
             )
         )
 
-        if (status.isNotEmpty()) InfoBox(status, centered = true)
+        AnimatedVisibility(
+            visible = status.isNotEmpty(),
+            enter = fadeIn(tween(220)) + expandVertically(tween(260, easing = FastOutSlowInEasing)),
+            exit = fadeOut(tween(160)) + shrinkVertically(tween(220, easing = FastOutSlowInEasing))
+        ) {
+            InfoBox(status, centered = true)
+        }
 
         Text(
             t("proj_more_soon"),
@@ -4345,7 +4359,13 @@ private fun TorNodesScreen(store: ConfigStore, modifier: Modifier = Modifier) {
             )
         }
 
-        if (status.isNotEmpty()) InfoBox(status, centered = true)
+        AnimatedVisibility(
+            visible = status.isNotEmpty(),
+            enter = fadeIn(tween(220)) + expandVertically(tween(260, easing = FastOutSlowInEasing)),
+            exit = fadeOut(tween(160)) + shrinkVertically(tween(220, easing = FastOutSlowInEasing))
+        ) {
+            InfoBox(status, centered = true)
+        }
     }
 }
 
@@ -8740,10 +8760,12 @@ private fun QrScannerScreen(onResult: (String) -> Unit) {
                         scaleType = PreviewView.ScaleType.FILL_CENTER
                         implementationMode = PreviewView.ImplementationMode.COMPATIBLE
                     }
+                    android.util.Log.d("GRouteQr", "factory: creating PreviewView")
                     val providerFuture = ProcessCameraProvider.getInstance(ctx)
                     providerFuture.addListener({
                         runCatching {
                             val provider = providerFuture.get()
+                            android.util.Log.d("GRouteQr", "provider ready, owner=$lifecycleOwner")
                             val preview = Preview.Builder().build().also {
                                 it.setSurfaceProvider(view.surfaceProvider)
                             }
@@ -8767,7 +8789,9 @@ private fun QrScannerScreen(onResult: (String) -> Unit) {
                                 }
                                 proxy.close()
                             }
-                            if (lifecycleOwner != null) {
+                            if (lifecycleOwner == null) {
+                                android.util.Log.e("GRouteQr", "no LifecycleOwner found - cannot bind")
+                            } else {
                                 provider.unbindAll()
                                 provider.bindToLifecycle(
                                     lifecycleOwner,
@@ -8775,7 +8799,10 @@ private fun QrScannerScreen(onResult: (String) -> Unit) {
                                     preview,
                                     analysis
                                 )
+                                android.util.Log.d("GRouteQr", "camera bound")
                             }
+                        }.onFailure {
+                            android.util.Log.e("GRouteQr", "camera setup failed", it)
                         }
                     }, ContextCompat.getMainExecutor(ctx))
                     view
@@ -8863,9 +8890,13 @@ private fun ConfigRow(
     val dragEnabled = !selectionMode && !checked
 
     val swiping = dragX < -6f
+    val haptics = LocalHapticFeedback.current
 
     LaunchedEffect(swiping) {
-        if (swiping) buzz(context)
+        if (swiping) {
+            runCatching { haptics.performHapticFeedback(HapticFeedbackType.LongPress) }
+            buzz(context)
+        }
     }
     LaunchedEffect(dragEnabled) {
         if (!dragEnabled) dragX = 0f
@@ -8891,6 +8922,7 @@ private fun ConfigRow(
                 },
                 onDragStopped = {
                     if (-dragX >= rowWidth * (1f / 3f)) {
+                        runCatching { haptics.performHapticFeedback(HapticFeedbackType.LongPress) }
                         buzz(context)
                         animate(
                             initialValue = dragX,
@@ -9097,6 +9129,7 @@ private fun isPersianChar(c: Char) =
             c in '\uFB50'..'\uFDFF' || c in '\uFE70'..'\uFEFF'
 
 private fun buzz(context: Context) {
+    android.util.Log.d("GRouteHaptic", "buzz() called")
     runCatching {
         val vibrator = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
             (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE)
@@ -9105,7 +9138,10 @@ private fun buzz(context: Context) {
             @Suppress("DEPRECATION")
             context.getSystemService(Context.VIBRATOR_SERVICE) as android.os.Vibrator
         }
-        if (!vibrator.hasVibrator()) return
+        if (!vibrator.hasVibrator()) {
+            android.util.Log.w("GRouteHaptic", "device reports no vibrator")
+            return
+        }
         val amplitude = if (vibrator.hasAmplitudeControl()) 255
         else android.os.VibrationEffect.DEFAULT_AMPLITUDE
         val effect = android.os.VibrationEffect.createOneShot(50, amplitude)
@@ -9114,7 +9150,7 @@ private fun buzz(context: Context) {
             vibrator.vibrate(
                 effect,
                 android.os.VibrationAttributes.createForUsage(
-                    android.os.VibrationAttributes.USAGE_TOUCH
+                    android.os.VibrationAttributes.USAGE_HARDWARE_FEEDBACK
                 )
             )
         } else {

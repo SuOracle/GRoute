@@ -30,6 +30,8 @@ class GozarVpnService : VpnService() {
     private var configName: String = "VPN"
     private var stopLabel: String = "Disconnect"
     @Volatile private var tearingDown = false
+    private var autoSelector: AutoSelector? = null
+    private var autoJob: Job? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -136,11 +138,56 @@ class GozarVpnService : VpnService() {
                 }
                 VpnBridge.sendConnected(applicationContext)
                 startPolling()
+                startAutoSelect()
             } catch (e: Exception) {
                 Log.e(TAG, "Xray core failed to start", e)
                 die(e.message ?: "Engine failed to start")
             }
         }
+    }
+
+    private fun startAutoSelect() {
+        if (autoJob?.isActive == true) return
+        val store = ConfigStore.get(applicationContext)
+        val selector = AutoSelector(applicationContext, store) { target ->
+            switchTunnel(target)
+        }
+        autoSelector = selector
+        autoJob = scope.launch {
+            store.autoSelect.collect { on ->
+                if (on) selector.start(this) else selector.stop()
+            }
+        }
+    }
+
+    private fun stopAutoSelect() {
+        autoJob?.cancel(); autoJob = null
+        autoSelector?.stop(); autoSelector = null
+    }
+
+    private fun switchTunnel(config: ProxyConfig) {
+        if (tearingDown) return
+        val store = ConfigStore.get(applicationContext)
+        val json = ConfigBuilder.build(
+            config, store.fragment.value, store.splitRouting.value,
+            store.sniffing.value, store.sniffTypes.value,
+            adBlock = store.adBlock.value,
+            fakeDns = store.fakeDns.value,
+            encryptedDns = store.encryptedDns.value,
+            onionRouting = store.onionRouting.value
+        )
+        Log.d(TAG, "switching tunnel to ${config.name}")
+        pollJob?.cancel(); pollJob = null
+        runCatching { Gozarcore.stop() }
+        AetherController.stop()
+        TorController.stop()
+        runCatching { tunFd?.close() }; tunFd = null
+        aetherSpec = AetherSpec.from(config)
+        torSpec = if (config.protocol == "tor")
+            config.torCountry + "|" + (if (config.torThroughVpn) "1" else "0") else null
+        configName = config.name
+        VpnState.setConnecting(config.id)
+        startTunnel(json)
     }
 
     private fun setupGeoAssets() {
@@ -218,6 +265,7 @@ class GozarVpnService : VpnService() {
             return
         }
         tearingDown = true
+        stopAutoSelect()
         pollJob?.cancel()
         pollJob = null
         runCatching { Gozarcore.stop() }
@@ -254,6 +302,7 @@ class GozarVpnService : VpnService() {
     }
 
     override fun onDestroy() {
+        stopAutoSelect()
         AetherController.stop()
         TorController.stop()
         runCatching { blockFd?.close() }; blockFd = null
@@ -279,7 +328,7 @@ class GozarVpnService : VpnService() {
         return Notification.Builder(this, CHANNEL_ID)
             .setContentTitle(configName)
             .setContentText(speedLine)
-            .setSmallIcon(R.drawable.notiflock)
+            .setSmallIcon(android.R.drawable.ic_lock_lock)
             .setContentIntent(pi)
             .addAction(
                 Notification.Action.Builder(
@@ -308,7 +357,7 @@ class GozarVpnService : VpnService() {
         return Notification.Builder(this, CHANNEL_ID)
             .setContentTitle("Kill switch active")
             .setContentText("Connection lost — internet is blocked to prevent leaks")
-            .setSmallIcon(R.drawable.notiflock)
+            .setSmallIcon(android.R.drawable.ic_lock_lock)
             .setContentIntent(pi)
             .addAction(
                 Notification.Action.Builder(

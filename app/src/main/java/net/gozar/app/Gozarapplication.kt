@@ -6,10 +6,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 class GozarApplication : org.strongswan.android.logic.StrongSwanApplication() {
 
@@ -38,14 +35,5 @@ class GozarApplication : org.strongswan.android.logic.StrongSwanApplication() {
             override fun onActivityDestroyed(activity: Activity) {}
         })
 
-        scope.launch {
-            val store = withContext(Dispatchers.IO) { ConfigStore.get(applicationContext) }
-            val selector = AutoSelector(applicationContext, store)
-            combine(store.autoSelect, foreground) { enabled, fg -> enabled && fg }
-                .distinctUntilChanged()
-                .collect { on ->
-                    if (on) selector.start(scope) else selector.stop()
-                }
-        }
     }
 }
