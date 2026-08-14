@@ -1,6 +1,7 @@
 package net.gozar.app
 
 import android.util.Base64
+import org.json.JSONArray
 import org.json.JSONObject
 import java.net.URLDecoder
 
@@ -14,10 +15,169 @@ object ConfigParser {
             val single = parseWireguardConf(trimmed, source)
             if (single != null) return listOf(single)
         }
+        if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+            val fromJson = parseJsonOutbounds(trimmed, source)
+            if (fromJson.isNotEmpty()) return fromJson
+        }
         return trimmed.split('\n', '\r')
             .map { it.trim() }
             .filter { it.isNotEmpty() }
             .mapNotNull { parse(it, source) }
+    }
+
+    fun parseJsonOutbounds(text: String, source: ConfigSource = ConfigSource.PERSONAL): List<ProxyConfig> {
+        val nodes = mutableListOf<JSONObject>()
+        runCatching {
+            val t = text.trim()
+            if (t.startsWith("[")) {
+                val arr = JSONArray(t)
+                for (i in 0 until arr.length()) arr.optJSONObject(i)?.let { nodes.add(it) }
+            } else {
+                val root = JSONObject(t)
+                val arr = root.optJSONArray("outbounds")
+                if (arr != null) {
+                    for (i in 0 until arr.length()) arr.optJSONObject(i)?.let { nodes.add(it) }
+                } else {
+                    nodes.add(root)
+                }
+            }
+        }.getOrElse { return emptyList() }
+
+        return nodes.mapNotNull { outboundToConfig(it, source) }
+    }
+
+    private fun outboundToConfig(o: JSONObject, source: ConfigSource): ProxyConfig? {
+        val protocol = o.optString("protocol").lowercase()
+        if (protocol.isEmpty()) return null
+        if (protocol in setOf("freedom", "blackhole", "dns", "tun", "loopback")) return null
+
+        val settings = o.optJSONObject("settings") ?: JSONObject()
+        val stream = o.optJSONObject("streamSettings") ?: JSONObject()
+        val tag = o.optString("tag")
+
+        var address = ""
+        var port = 0
+        var uuid = ""
+        var password = ""
+        var method = ""
+        var encryption = ""
+        var flow = ""
+        var alterId = 0
+
+        when (protocol) {
+            "vless", "vmess" -> {
+                val v = settings.optJSONArray("vnext")?.optJSONObject(0) ?: return null
+                address = v.optString("address")
+                port = v.optInt("port")
+                val u = v.optJSONArray("users")?.optJSONObject(0) ?: JSONObject()
+                uuid = u.optString("id")
+                flow = u.optString("flow")
+                alterId = u.optInt("alterId", 0)
+                encryption = if (protocol == "vless")
+                    u.optString("encryption").ifEmpty { "none" }
+                else u.optString("security").ifEmpty { "auto" }
+            }
+            "trojan", "shadowsocks", "socks", "http" -> {
+                val v = settings.optJSONArray("servers")?.optJSONObject(0) ?: return null
+                address = v.optString("address")
+                port = v.optInt("port")
+                password = v.optString("password")
+                method = v.optString("method")
+                flow = v.optString("flow")
+                val u = v.optJSONArray("users")?.optJSONObject(0)
+                if (u != null) {
+                    uuid = u.optString("user")
+                    if (password.isEmpty()) password = u.optString("pass")
+                }
+            }
+            else -> return null
+        }
+        if (address.isEmpty() || port <= 0) return null
+
+        val network = normalizeNetwork(stream.optString("network").ifEmpty { "tcp" })
+        val security = stream.optString("security").ifEmpty { "none" }
+        val tls = stream.optJSONObject("tlsSettings")
+        val reality = stream.optJSONObject("realitySettings")
+        val sec = tls ?: reality
+
+        var host = ""
+        var path = ""
+        var headerType = ""
+        var serviceName = ""
+        when (network) {
+            "tcp" -> {
+                val header = stream.optJSONObject("tcpSettings")?.optJSONObject("header")
+                headerType = normalizeHeaderType(header?.optString("type"))
+                val req = header?.optJSONObject("request")
+                path = req?.optJSONArray("path")?.optString(0).orEmpty()
+                host = req?.optJSONObject("headers")?.optJSONArray("Host")?.optString(0).orEmpty()
+            }
+            "kcp" -> {
+                val kcp = stream.optJSONObject("kcpSettings")
+                headerType = normalizeHeaderType(kcp?.optJSONObject("header")?.optString("type"))
+                path = kcp?.optString("seed").orEmpty()
+            }
+            "ws" -> {
+                val ws = stream.optJSONObject("wsSettings")
+                path = ws?.optString("path").orEmpty()
+                host = ws?.optJSONObject("headers")?.optString("Host").orEmpty()
+                if (host.isEmpty()) host = ws?.optString("host").orEmpty()
+            }
+            "httpupgrade" -> {
+                val hu = stream.optJSONObject("httpupgradeSettings")
+                path = hu?.optString("path").orEmpty()
+                host = hu?.optString("host").orEmpty()
+            }
+            "xhttp" -> {
+                val xh = stream.optJSONObject("xhttpSettings")
+                path = xh?.optString("path").orEmpty()
+                host = xh?.optString("host").orEmpty()
+            }
+            "grpc" -> {
+                val g = stream.optJSONObject("grpcSettings")
+                serviceName = g?.optString("serviceName").orEmpty()
+                host = g?.optString("authority").orEmpty()
+            }
+            "http" -> {
+                val h = stream.optJSONObject("httpSettings")
+                path = h?.optString("path").orEmpty()
+                host = h?.optJSONArray("host")?.optString(0).orEmpty()
+            }
+        }
+
+        val sni = sec?.optString("serverName").orEmpty()
+        val alpnArr = sec?.optJSONArray("alpn")
+        val alpn = if (alpnArr == null) "" else
+            (0 until alpnArr.length()).joinToString(",") { alpnArr.optString(it) }
+
+        val name = tag.takeIf { it.isNotEmpty() && it != "proxy" }
+            ?: (if (sni.isNotEmpty()) sni else "$address:$port")
+
+        return ProxyConfig(
+            name = name,
+            protocol = protocol,
+            address = address,
+            port = port,
+            uuid = uuid,
+            password = password,
+            method = method,
+            encryption = encryption,
+            flow = flow,
+            alterId = alterId,
+            network = network,
+            security = if (reality != null) "reality" else security,
+            sni = sni,
+            alpn = alpn,
+            host = host,
+            path = path,
+            headerType = headerType,
+            serviceName = serviceName,
+            fingerprint = sec?.optString("fingerprint").orEmpty().ifEmpty { "chrome" },
+            publicKey = reality?.optString("publicKey").orEmpty(),
+            shortId = reality?.optString("shortId").orEmpty(),
+            allowInsecure = sec?.optBoolean("allowInsecure", false) ?: false,
+            source = source
+        )
     }
 
     fun parse(uri: String, source: ConfigSource = ConfigSource.PERSONAL): ProxyConfig? {
