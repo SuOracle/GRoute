@@ -198,6 +198,8 @@ import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.FileUpload
 import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.VisibilityOff
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.DeleteForever
@@ -2773,6 +2775,7 @@ private fun ExportConfigScreen(
     modifier: Modifier = Modifier
 ) {
     val t = stringsFn()
+    val lang = LocalLang.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val multi = configs.size > 1
@@ -2781,51 +2784,28 @@ private fun ExportConfigScreen(
     var fileName by remember { mutableStateOf(defaultName) }
     var password by remember { mutableStateOf("") }
     var showPassword by remember { mutableStateOf(false) }
+    var lockDetails by remember { mutableStateOf(true) }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
 
     Column(
-        modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp)
+        modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Card(
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f))
-        ) {
-            Row(
-                Modifier.fillMaxWidth().padding(14.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    Icons.Filled.Lock, contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp)
-                )
-                Spacer(Modifier.width(12.dp))
-                Text(
-                    t("export_encrypted_note"),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.weight(1f)
-                )
-            }
-        }
+        InfoBox(t("export_encrypted_note"))
 
         if (multi) {
-            Text(
-                t("export_count").format(configs.size),
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.primary
-            )
+            InfoBox(localizeDigits(t("export_count").format(configs.size), lang))
         }
 
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        SettingsGroup {
             OutlinedTextField(
                 fileName,
                 { fileName = it },
                 label = { Text(t("export_file_name")) },
                 singleLine = true,
                 shape = RoundedCornerShape(16.dp),
+                textStyle = LocalTextStyle.current.copy(fontFamily = monoLatinFont()),
                 trailingIcon = {
                     Text(
                         ".grt",
@@ -2846,40 +2826,38 @@ private fun ExportConfigScreen(
                 singleLine = true,
                 visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
                 shape = RoundedCornerShape(16.dp),
+                textStyle = LocalTextStyle.current.copy(fontFamily = monoLatinFont()),
+                trailingIcon = {
+                    Icon(
+                        if (showPassword) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                        contentDescription = t("show"),
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .padding(end = 6.dp)
+                            .clip(CircleShape)
+                            .clickable { showPassword = !showPassword }
+                            .padding(8.dp)
+                            .size(20.dp)
+                    )
+                },
                 modifier = Modifier.fillMaxWidth()
             )
 
-            Row(
-                Modifier.fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
-                    .clickable { showPassword = !showPassword }
-                    .padding(vertical = 2.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Checkbox(checked = showPassword, onCheckedChange = { showPassword = it })
-                Text(t("show"), style = MaterialTheme.typography.bodyMedium)
-            }
-        }
-
-        Row(verticalAlignment = Alignment.Top) {
-            Icon(
-                Icons.Filled.InsertDriveFile, contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(18.dp).padding(top = 2.dp)
-            )
-            Spacer(Modifier.width(10.dp))
-            Text(
-                t("export_locked_note"),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.weight(1f)
+            SettingRow(
+                title = t("export_lock_details"),
+                subtitle = if (lockDetails) t("export_locked_note") else t("export_unlocked_note"),
+                checked = lockDetails,
+                onCheckedChange = { lockDetails = it }
             )
         }
 
-        if (error.isNotEmpty())
-            Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-
-        Spacer(Modifier.height(2.dp))
+        AnimatedVisibility(
+            visible = error.isNotEmpty(),
+            enter = fadeIn(tween(200)) + expandVertically(tween(240, easing = FastOutSlowInEasing)),
+            exit = fadeOut(tween(150)) + shrinkVertically(tween(200, easing = FastOutSlowInEasing))
+        ) {
+            InfoBox(error, accent = MaterialTheme.colorScheme.error, centered = true)
+        }
 
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             BounceOutlinedButton(onClick = onCancel, modifier = Modifier.weight(1f)) { Text(t("cancel")) }
@@ -2891,7 +2869,9 @@ private fun ExportConfigScreen(
                     scope.launch {
                         val result = runCatching {
                             withContext(Dispatchers.Default) {
-                                val bytes = ConfigFile.encode(context, configs, password.ifBlank { null })
+                                val bytes = ConfigFile.encode(
+                                    context, configs, password.ifBlank { null }, lockDetails
+                                )
                                 ConfigFile.writeToCache(context, fileName, bytes)
                             }
                         }
@@ -2915,11 +2895,21 @@ private fun ExportConfigScreen(
                 enabled = !busy && fileName.isNotBlank(),
                 modifier = Modifier.weight(1f)
             ) {
-                Text(
-                    t("export_continue"),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                if (busy) {
+                    CircularProgressIndicator(
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                } else {
+                    Icon(
+                        Icons.Filled.InsertDriveFile,
+                        contentDescription = null,
+                        modifier = Modifier.size(17.dp)
+                    )
+                    Spacer(Modifier.width(7.dp))
+                    Text(t("export_continue"), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
             }
         }
     }
@@ -3568,9 +3558,11 @@ private fun GlassDialog(
     onConfirm: () -> Unit,
     dismissLabel: String? = null,
     destructive: Boolean = false,
+    accentOverride: Color? = null,
     body: @Composable ColumnScope.() -> Unit
 ) {
-    val accent = if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+    val accent = accentOverride
+        ?: if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
     Dialog(onDismissRequest = onDismiss) {
         Card(
             shape = RoundedCornerShape(24.dp),
@@ -5119,7 +5111,7 @@ private fun BackupRow(store: ConfigStore) {
             title = t("backup_import"),
             confirmLabel = t("import_button"),
             dismissLabel = t("cancel"),
-            destructive = true,
+            accentOverride = AppGreen,
             onConfirm = {
                 pending = null
                 scope.launch {

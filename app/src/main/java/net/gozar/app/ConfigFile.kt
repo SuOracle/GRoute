@@ -66,10 +66,15 @@ object ConfigFile {
         return (bytes[4].toInt() and FLAG_PW) != 0
     }
 
-    fun encode(context: Context, configs: List<ProxyConfig>, password: String?): ByteArray {
+    fun encode(
+        context: Context,
+        configs: List<ProxyConfig>,
+        password: String?,
+        locked: Boolean = true
+    ): ByteArray {
         val arr = JSONArray()
         configs.forEach { arr.put(it.toJson()) }
-        val root = JSONObject().put("v", 1).put("configs", arr)
+        val root = JSONObject().put("v", 1).put("locked", locked).put("configs", arr)
         return seal(context, root, password)
     }
 
@@ -122,11 +127,12 @@ object ConfigFile {
     fun decode(context: Context, bytes: ByteArray, password: String?): List<ProxyConfig> {
         val root = open(context, bytes, password)
         val arr = root.optJSONArray("configs") ?: throw BadFile()
+        val locked = root.optBoolean("locked", true)
         return (0 until arr.length()).map { i ->
             ProxyConfig.fromJson(arr.getJSONObject(i)).copy(
                 id = java.util.UUID.randomUUID().toString(),
                 subId = "",
-                locked = true,
+                locked = locked,
                 source = ConfigSource.COMMUNITY
             )
         }
