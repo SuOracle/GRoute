@@ -627,8 +627,8 @@ object WindscribeBrand {
     fun isWindscribe(sub: Subscription): Boolean {
         val n = sub.name.trim()
         return n.equals(SUB_NAME, ignoreCase = true) ||
-                n.startsWith("$SUB_NAME -", ignoreCase = true) ||
-                n.startsWith("$SUB_NAME-", ignoreCase = true)
+            n.startsWith("$SUB_NAME -", ignoreCase = true) ||
+            n.startsWith("$SUB_NAME-", ignoreCase = true)
     }
 
     fun displayName(sub: Subscription, lang: Lang): String =
@@ -2393,7 +2393,7 @@ private fun ConfigPickerScreen(
             )
         }
         val isBad = statusLine.isNotEmpty() &&
-                badLines.any { it.isNotEmpty() && statusLine.startsWith(it) }
+            badLines.any { it.isNotEmpty() && statusLine.startsWith(it) }
         val statusAccent =
             if (isBad) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
 
@@ -2827,6 +2827,7 @@ private fun ExportConfigScreen(
                 visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
                 shape = RoundedCornerShape(16.dp),
                 textStyle = LocalTextStyle.current.copy(fontFamily = monoLatinFont()),
+<<<<<<< HEAD
                 trailingIcon = {
                     Icon(
                         if (showPassword) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
@@ -2859,6 +2860,33 @@ private fun ExportConfigScreen(
             InfoBox(error, accent = MaterialTheme.colorScheme.error, centered = true)
         }
 
+=======
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Row(
+                Modifier.fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .clickable { showPassword = !showPassword }
+                    .padding(vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Checkbox(checked = showPassword, onCheckedChange = { showPassword = it })
+                Text(t("show"), style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+
+        InfoBox(t("export_locked_note"))
+
+        AnimatedVisibility(
+            visible = error.isNotEmpty(),
+            enter = fadeIn(tween(200)) + expandVertically(tween(240, easing = FastOutSlowInEasing)),
+            exit = fadeOut(tween(150)) + shrinkVertically(tween(200, easing = FastOutSlowInEasing))
+        ) {
+            InfoBox(error, accent = MaterialTheme.colorScheme.error, centered = true)
+        }
+
+>>>>>>> fc14c0c576a8002c4b0895e8f8a9594bcb926342
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             BounceOutlinedButton(onClick = onCancel, modifier = Modifier.weight(1f)) { Text(t("cancel")) }
             BounceButton(
@@ -3822,10 +3850,10 @@ private fun WindscribeScreen(store: ConfigStore, modifier: Modifier = Modifier) 
                         expanded = locationsOpen,
                         searchOpen = searchOpen,
                         allSelected = shown.isNotEmpty() &&
-                                shown.all { picked[it.hostname] == true },
+                            shown.all { picked[it.hostname] == true },
                         onSelectAll = {
                             val target = !(shown.isNotEmpty() &&
-                                    shown.all { picked[it.hostname] == true })
+                                shown.all { picked[it.hostname] == true })
                             shown.forEach { node ->
                                 if (target) picked[node.hostname] = true
                                 else picked.remove(node.hostname)
@@ -8400,7 +8428,7 @@ private fun quotaChips(sub: Subscription, lang: Lang): List<Pair<String, Int>> {
         }
         parts.add(
             "${formatBytes(remaining, lang)} ${Strings.get(lang, "of")} " +
-                    "${formatBytes(sub.total, lang)} ${Strings.get(lang, "left")}" to level
+                "${formatBytes(sub.total, lang)} ${Strings.get(lang, "left")}" to level
         )
     }
     if (sub.expire > 0) {
@@ -8413,7 +8441,7 @@ private fun quotaChips(sub: Subscription, lang: Lang): List<Pair<String, Int>> {
             }
             parts.add(
                 "${Strings.get(lang, "expires_in")} " +
-                        "${localizeDigits("$daysLeft", lang)}${Strings.get(lang, "unit_days")}" to level
+                    "${localizeDigits("$daysLeft", lang)}${Strings.get(lang, "unit_days")}" to level
             )
         }
     }
