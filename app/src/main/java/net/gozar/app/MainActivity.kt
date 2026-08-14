@@ -625,8 +625,8 @@ object WindscribeBrand {
     fun isWindscribe(sub: Subscription): Boolean {
         val n = sub.name.trim()
         return n.equals(SUB_NAME, ignoreCase = true) ||
-                n.startsWith("$SUB_NAME -", ignoreCase = true) ||
-                n.startsWith("$SUB_NAME-", ignoreCase = true)
+            n.startsWith("$SUB_NAME -", ignoreCase = true) ||
+            n.startsWith("$SUB_NAME-", ignoreCase = true)
     }
 
     fun displayName(sub: Subscription, lang: Lang): String =
@@ -2391,7 +2391,7 @@ private fun ConfigPickerScreen(
             )
         }
         val isBad = statusLine.isNotEmpty() &&
-                badLines.any { it.isNotEmpty() && statusLine.startsWith(it) }
+            badLines.any { it.isNotEmpty() && statusLine.startsWith(it) }
         val statusAccent =
             if (isBad) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
 
@@ -2773,6 +2773,7 @@ private fun ExportConfigScreen(
     modifier: Modifier = Modifier
 ) {
     val t = stringsFn()
+    val lang = LocalLang.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val multi = configs.size > 1
@@ -2785,47 +2786,23 @@ private fun ExportConfigScreen(
     var error by remember { mutableStateOf("") }
 
     Column(
-        modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp)
+        modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Card(
-            shape = RoundedCornerShape(16.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f))
-        ) {
-            Row(
-                Modifier.fillMaxWidth().padding(14.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    Icons.Filled.Lock, contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(22.dp)
-                )
-                Spacer(Modifier.width(12.dp))
-                Text(
-                    t("export_encrypted_note"),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.weight(1f)
-                )
-            }
-        }
+        InfoBox(t("export_encrypted_note"))
 
         if (multi) {
-            Text(
-                t("export_count").format(configs.size),
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.primary
-            )
+            InfoBox(localizeDigits(t("export_count").format(configs.size), lang))
         }
 
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        SettingsGroup {
             OutlinedTextField(
                 fileName,
                 { fileName = it },
                 label = { Text(t("export_file_name")) },
                 singleLine = true,
                 shape = RoundedCornerShape(16.dp),
+                textStyle = LocalTextStyle.current.copy(fontFamily = monoLatinFont()),
                 trailingIcon = {
                     Text(
                         ".grt",
@@ -2846,6 +2823,7 @@ private fun ExportConfigScreen(
                 singleLine = true,
                 visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
                 shape = RoundedCornerShape(16.dp),
+                textStyle = LocalTextStyle.current.copy(fontFamily = monoLatinFont()),
                 modifier = Modifier.fillMaxWidth()
             )
 
@@ -2861,25 +2839,15 @@ private fun ExportConfigScreen(
             }
         }
 
-        Row(verticalAlignment = Alignment.Top) {
-            Icon(
-                Icons.Filled.InsertDriveFile, contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(18.dp).padding(top = 2.dp)
-            )
-            Spacer(Modifier.width(10.dp))
-            Text(
-                t("export_locked_note"),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.weight(1f)
-            )
+        InfoBox(t("export_locked_note"))
+
+        AnimatedVisibility(
+            visible = error.isNotEmpty(),
+            enter = fadeIn(tween(200)) + expandVertically(tween(240, easing = FastOutSlowInEasing)),
+            exit = fadeOut(tween(150)) + shrinkVertically(tween(200, easing = FastOutSlowInEasing))
+        ) {
+            InfoBox(error, accent = MaterialTheme.colorScheme.error, centered = true)
         }
-
-        if (error.isNotEmpty())
-            Text(error, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-
-        Spacer(Modifier.height(2.dp))
 
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             BounceOutlinedButton(onClick = onCancel, modifier = Modifier.weight(1f)) { Text(t("cancel")) }
@@ -2915,11 +2883,21 @@ private fun ExportConfigScreen(
                 enabled = !busy && fileName.isNotBlank(),
                 modifier = Modifier.weight(1f)
             ) {
-                Text(
-                    t("export_continue"),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
+                if (busy) {
+                    CircularProgressIndicator(
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.size(16.dp)
+                    )
+                } else {
+                    Icon(
+                        Icons.Filled.InsertDriveFile,
+                        contentDescription = null,
+                        modifier = Modifier.size(17.dp)
+                    )
+                    Spacer(Modifier.width(7.dp))
+                    Text(t("export_continue"), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
             }
         }
     }
@@ -3568,9 +3546,11 @@ private fun GlassDialog(
     onConfirm: () -> Unit,
     dismissLabel: String? = null,
     destructive: Boolean = false,
+    accentOverride: Color? = null,
     body: @Composable ColumnScope.() -> Unit
 ) {
-    val accent = if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+    val accent = accentOverride
+        ?: if (destructive) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
     Dialog(onDismissRequest = onDismiss) {
         Card(
             shape = RoundedCornerShape(24.dp),
@@ -3830,10 +3810,10 @@ private fun WindscribeScreen(store: ConfigStore, modifier: Modifier = Modifier) 
                         expanded = locationsOpen,
                         searchOpen = searchOpen,
                         allSelected = shown.isNotEmpty() &&
-                                shown.all { picked[it.hostname] == true },
+                            shown.all { picked[it.hostname] == true },
                         onSelectAll = {
                             val target = !(shown.isNotEmpty() &&
-                                    shown.all { picked[it.hostname] == true })
+                                shown.all { picked[it.hostname] == true })
                             shown.forEach { node ->
                                 if (target) picked[node.hostname] = true
                                 else picked.remove(node.hostname)
@@ -5119,7 +5099,7 @@ private fun BackupRow(store: ConfigStore) {
             title = t("backup_import"),
             confirmLabel = t("import_button"),
             dismissLabel = t("cancel"),
-            destructive = true,
+            accentOverride = AppGreen,
             onConfirm = {
                 pending = null
                 scope.launch {
@@ -8408,7 +8388,7 @@ private fun quotaChips(sub: Subscription, lang: Lang): List<Pair<String, Int>> {
         }
         parts.add(
             "${formatBytes(remaining, lang)} ${Strings.get(lang, "of")} " +
-                    "${formatBytes(sub.total, lang)} ${Strings.get(lang, "left")}" to level
+                "${formatBytes(sub.total, lang)} ${Strings.get(lang, "left")}" to level
         )
     }
     if (sub.expire > 0) {
@@ -8421,7 +8401,7 @@ private fun quotaChips(sub: Subscription, lang: Lang): List<Pair<String, Int>> {
             }
             parts.add(
                 "${Strings.get(lang, "expires_in")} " +
-                        "${localizeDigits("$daysLeft", lang)}${Strings.get(lang, "unit_days")}" to level
+                    "${localizeDigits("$daysLeft", lang)}${Strings.get(lang, "unit_days")}" to level
             )
         }
     }
