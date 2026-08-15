@@ -5357,9 +5357,25 @@ private fun ConfigDebuggerScreen(
                 RadarDot(tint, testing)
                 Spacer(Modifier.width(8.dp))
                 Column(Modifier.weight(1f)) {
-                    MarqueeName(config.name, MaterialTheme.typography.titleSmall)
+                    if (config.locked) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                Icons.Filled.Lock,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Box(Modifier.weight(1f)) {
+                                MarqueeName(config.name, MaterialTheme.typography.titleSmall)
+                            }
+                        }
+                    } else {
+                        MarqueeName(config.name, MaterialTheme.typography.titleSmall)
+                    }
                     Text(
-                        monoText(
+                        if (config.locked) AnnotatedString(t("locked_config"))
+                        else monoText(
                             localizeDigits(
                                 "${config.protocol} \u00b7 ${config.address}:${config.port}", lang
                             )
