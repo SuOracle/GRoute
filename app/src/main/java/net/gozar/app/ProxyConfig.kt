@@ -36,7 +36,7 @@ data class ProxyConfig(
     val aetherMode: String = "masque",
     val aetherScan: String = "balanced",
     val aetherNoise: String = "",
-    val aetherHttp2: Boolean = false,
+    val aetherHttp2: Boolean = true,
     val aetherIpv6: Boolean = false,
     val hyObfs: String = "",
     val hyObfsPassword: String = "",

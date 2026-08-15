@@ -88,6 +88,9 @@ import org.json.JSONObject
 import java.io.ByteArrayInputStream
 import java.util.zip.GZIPInputStream
 import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.conflate
 import kotlin.math.PI
 import kotlin.math.abs
@@ -108,13 +111,40 @@ data class IpLocation(
 internal val TehranFallback = IpLocation("\u2014", "Tehran", "Iran", "IR", 35.6892, 51.3890)
 
 object LocationFetcher {
+    private const val GEO_TAG = "GRouteGeo"
+
+    private val _lastIp = MutableStateFlow("")
+    val lastIp: StateFlow<String> = _lastIp.asStateFlow()
+
     suspend fun fetch(throughProxy: Boolean): IpLocation? = withContext(Dispatchers.IO) {
         val proxy = if (throughProxy)
             java.net.Proxy(java.net.Proxy.Type.SOCKS, java.net.InetSocketAddress("127.0.0.1", MixedPort.value))
         else java.net.Proxy.NO_PROXY
+        android.util.Log.d(GEO_TAG, "fetch throughProxy=" + throughProxy +
+                " via=" + (if (throughProxy) "127.0.0.1:" + MixedPort.value else "direct"))
         val ip = fetchPlainIp(proxy, "https://api4.ipify.org")
             ?: fetchPlainIp(proxy, "https://api6.ipify.org")
-        fromIpWhoIs(proxy, ip) ?: fromIpApiCo(proxy, ip)
+        if (ip == null) {
+            android.util.Log.w(GEO_TAG, "ipify returned nothing")
+        } else {
+            android.util.Log.d(GEO_TAG, "ipify -> " + ip)
+        }
+        var out = fromIpWhoIs(proxy, ip)
+            ?: fromFreeIpApi(proxy, ip)
+            ?: fromIpApiCo(proxy, ip)
+        if (out == null && ip != null && throughProxy) {
+            android.util.Log.d(GEO_TAG, "proxied lookup refused, retrying direct for " + ip)
+            val direct = java.net.Proxy.NO_PROXY
+            out = fromIpWhoIs(direct, ip)
+                ?: fromFreeIpApi(direct, ip)
+                        ?: fromIpApiCo(direct, ip)
+        }
+        if (out == null) android.util.Log.w(GEO_TAG, "all geo providers failed for " + ip)
+        else android.util.Log.d(GEO_TAG,
+            "geo -> " + out.ip + " " + out.city + ", " + out.country +
+                    " (" + out.lat + "," + out.lon + ")")
+        out?.ip?.takeIf { it.isNotBlank() && it != "\u2014" }?.let { _lastIp.value = it }
+        out
     }
 
     private fun httpGet(proxy: java.net.Proxy, url: String, timeout: Int): String? = try {
@@ -133,14 +163,43 @@ object LocationFetcher {
             val url = if (ip != null) "https://ipwho.is/$ip" else "https://ipwho.is/"
             val body = httpGet(proxy, url, 8000) ?: return null
             val o = JSONObject(body)
-            if (!o.optBoolean("success", true)) return null
+            if (!o.optBoolean("success", true)) {
+                android.util.Log.w(GEO_TAG, "ipwho.is: " + o.optString("message", "failed"))
+                return null
+            }
+            val lat = o.optDouble("latitude", Double.NaN)
+            val lon = o.optDouble("longitude", Double.NaN)
+            if (lat.isNaN() || lon.isNaN()) {
+                android.util.Log.w(GEO_TAG, "ipwho.is: no coordinates in response")
+                return null
+            }
             IpLocation(
                 ip = ip ?: o.optString("ip", "\u2014"),
                 city = o.optString("city", "\u2014"),
                 country = o.optString("country", "\u2014"),
                 countryCode = o.optString("country_code", ""),
-                lat = o.optDouble("latitude", TehranFallback.lat),
-                lon = o.optDouble("longitude", TehranFallback.lon)
+                lat = lat,
+                lon = lon
+            )
+        } catch (e: Exception) { null }
+    }
+
+    private fun fromFreeIpApi(proxy: java.net.Proxy, ip: String?): IpLocation? {
+        return try {
+            val url = if (ip != null) "https://freeipapi.com/api/json/$ip"
+            else "https://freeipapi.com/api/json"
+            val body = httpGet(proxy, url, 8000) ?: return null
+            val o = JSONObject(body)
+            val lat = o.optDouble("latitude", Double.NaN)
+            val lon = o.optDouble("longitude", Double.NaN)
+            if (lat.isNaN() || lon.isNaN()) return null
+            IpLocation(
+                ip = ip ?: o.optString("ipAddress", "\u2014"),
+                city = o.optString("cityName", "\u2014"),
+                country = o.optString("countryName", "\u2014"),
+                countryCode = o.optString("countryCode", ""),
+                lat = lat,
+                lon = lon
             )
         } catch (e: Exception) { null }
     }
@@ -498,17 +557,19 @@ fun EarthSection(modifier: Modifier = Modifier) {
     val globeContext = androidx.compose.ui.platform.LocalContext.current
     LaunchedEffect(loc.ip, offline, badgeTarget) { badgeShown = badgeTarget }
     val killSwitchOn by ConfigStore.get(globeContext).killSwitch.collectAsState()
-    LaunchedEffect(conn, killSwitchOn) {
+    val locActiveId by VpnState.activeId.collectAsState()
+    LaunchedEffect(conn, killSwitchOn, locActiveId) {
         when (conn) {
             Connection.CONNECTED -> {
                 delay(1200)
-                repeat(5) { attempt ->
+                repeat(12) { attempt ->
+                    if (VpnState.state.value != Connection.CONNECTED) return@LaunchedEffect
                     val l = LocationFetcher.fetch(throughProxy = !IkeController.active)
                     if (l != null) {
                         loc = l
                         return@LaunchedEffect
                     }
-                    delay(1500L + attempt * 500L)
+                    delay(minOf(2000L + attempt * 1000L, 8000L))
                 }
             }
             Connection.DISCONNECTED -> {

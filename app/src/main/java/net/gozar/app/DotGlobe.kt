@@ -511,14 +511,36 @@ fun DotGlobeSection(modifier: Modifier = Modifier) {
     val dotGlobeContext = androidx.compose.ui.platform.LocalContext.current
     val killSwitchOn by ConfigStore.get(dotGlobeContext).killSwitch.collectAsState()
     var homeIp by remember { mutableStateOf("") }
-    LaunchedEffect(conn, killSwitchOn) {
+    val locActiveId by VpnState.activeId.collectAsState()
+    LaunchedEffect(conn, killSwitchOn, locActiveId) {
         when (conn) {
-            Connection.CONNECTED -> loc =
-                LocationFetcher.fetch(throughProxy = !IkeController.active) ?: TehranFallback
+            Connection.CONNECTED -> {
+                delay(1200)
+                repeat(24) { attempt ->
+                    if (VpnState.state.value != Connection.CONNECTED) return@LaunchedEffect
+                    val l = LocationFetcher.fetch(throughProxy = !IkeController.active)
+                    if (l != null) {
+                        loc = l
+                        return@LaunchedEffect
+                    }
+                    delay(minOf(1500L + attempt * 500L, 6000L))
+                }
+            }
             Connection.DISCONNECTED -> {
-                loc = if (killSwitchOn) TehranFallback
-                else LocationFetcher.fetch(throughProxy = false) ?: TehranFallback
-                if (!killSwitchOn && loc.ip.isNotBlank() && loc.ip != "\u2014") homeIp = loc.ip
+                if (killSwitchOn) {
+                    loc = TehranFallback
+                    return@LaunchedEffect
+                }
+                repeat(3) {
+                    val l = LocationFetcher.fetch(throughProxy = false)
+                    if (l != null) {
+                        loc = l
+                        if (l.ip.isNotBlank() && l.ip != "\u2014") homeIp = l.ip
+                        return@LaunchedEffect
+                    }
+                    delay(1000)
+                }
+                loc = TehranFallback
             }
             else -> { }
         }

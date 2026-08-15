@@ -3265,7 +3265,7 @@ private fun FreeProjectsScreen(
     var busy by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("") }
     var aetherMode by remember { mutableStateOf("masque") }
-    var aetherH2 by remember { mutableStateOf(false) }
+    var aetherH2 by remember { mutableStateOf(true) }
 
     LaunchedEffect(status) { if (status.isNotEmpty()) { delay(4000); status = "" } }
 
@@ -3346,7 +3346,10 @@ private fun FreeProjectsScreen(
                 listOf("masque" to "MASQUE", "wg" to "WireGuard", "gool" to "gool").forEach { (key, label) ->
                     val on = aetherMode == key
                     BounceOutlinedButton(
-                        onClick = { aetherMode = key },
+                        onClick = {
+                            aetherMode = key
+                            aetherH2 = key == "masque"
+                        },
                         minHeight = 40.dp,
                         contentPadding = PaddingValues(horizontal = 4.dp),
                         accent = if (on) MaterialTheme.colorScheme.primary
@@ -3361,8 +3364,9 @@ private fun FreeProjectsScreen(
             SettingRow(
                 title = t("proj_aether_h2"),
                 subtitle = t("proj_aether_h2_sub"),
-                checked = aetherH2,
-                onCheckedChange = { aetherH2 = it }
+                checked = aetherH2 && aetherMode == "masque",
+                onCheckedChange = { aetherH2 = it },
+                enabled = aetherMode == "masque"
             )
             BounceButton(
                 onClick = {
@@ -4416,6 +4420,12 @@ private fun CheckHostScreen(modifier: Modifier = Modifier) {
     var kind by remember { mutableStateOf("ping") }
     var running by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf("") }
+    val currentIp by LocationFetcher.lastIp.collectAsState()
+    var touched by remember { mutableStateOf(false) }
+
+    LaunchedEffect(currentIp) {
+        if (!touched && currentIp.isNotBlank()) host = currentIp
+    }
     var nodes by remember { mutableStateOf(listOf<CheckHost.Node>()) }
     var info by remember { mutableStateOf<CheckHost.IpInfo?>(null) }
     val results = remember { mutableStateMapOf<String, CheckHost.NodeResult>() }
@@ -4457,10 +4467,16 @@ private fun CheckHostScreen(modifier: Modifier = Modifier) {
     ) {
         OutlinedTextField(
             value = host,
-            onValueChange = { host = it },
+            onValueChange = { host = it; touched = true },
             singleLine = true,
             label = { Text(t("chk_host")) },
-            placeholder = { Text(mixedText("example.com")) },
+            placeholder = {
+                Text(
+                    mixedText(currentIp.ifEmpty { "example.com" }),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            },
             textStyle = LocalTextStyle.current.copy(
                 fontFamily = if (LocalLang.current == Lang.FA) VazirFont else LexendFont
             ),
@@ -4471,7 +4487,7 @@ private fun CheckHostScreen(modifier: Modifier = Modifier) {
                     Icon(
                         Icons.Filled.Close,
                         contentDescription = null,
-                        modifier = Modifier.clickable { host = ""; focus.clearFocus() }
+                        modifier = Modifier.clickable { host = ""; touched = true; focus.clearFocus() }
                     )
                 }
             },
@@ -6434,7 +6450,7 @@ private fun readLogcat(): String = try {
         "XrayCore:V", "GoLog:V", "GozarVpnService:V",
         "Aether:V", "Tor:V", "GRouteIke:V",
         "charon:V", "CharonVpnService:V",
-        "GRouteAuto:V", "GRouteQr:V", "GRouteHaptic:V",
+        "GRouteAuto:V", "GRouteQr:V", "GRouteHaptic:V", "GRouteGeo:V",
         "*:S"
     ))
     val lines = proc.inputStream.bufferedReader().readLines()
