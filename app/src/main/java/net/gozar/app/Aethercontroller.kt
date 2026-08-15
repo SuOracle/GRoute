@@ -125,6 +125,8 @@ object AetherController {
 
         val dir = workDir(context)
         val cmd = mutableListOf(bin.absolutePath).apply { addAll(args(spec)) }
+        Log.i(TAG, "exec: " + cmd.joinToString(" "))
+        lastOutput.clear()
 
         val p = try {
             ProcessBuilder(cmd)
@@ -141,9 +143,15 @@ object AetherController {
         thread(isDaemon = true, name = "aether-log") {
             runCatching {
                 BufferedReader(InputStreamReader(p.inputStream)).useLines { lines ->
-                    lines.forEach { if (!stopping) Log.i(TAG, it) }
+                    lines.forEach {
+                        synchronized(lastOutput) {
+                            lastOutput.addLast(it)
+                            while (lastOutput.size > 40) lastOutput.removeFirst()
+                        }
+                        if (!stopping) Log.i(TAG, it)
+                    }
                 }
-            }
+            }.onFailure { Log.w(TAG, "log reader ended: " + it.message) }
         }
 
         return waitForPort()
@@ -155,7 +163,9 @@ object AetherController {
             if (stopping) return false
             val p = process
             if (p == null || !p.isAlive) {
-                Log.e(TAG, "process exited before the proxy came up")
+                val code = runCatching { p?.exitValue() }.getOrNull()
+                Log.e(TAG, "process exited before the proxy came up, exit code=" + code)
+                dumpOutput()
                 return false
             }
             val ok = runCatching {
@@ -170,8 +180,21 @@ object AetherController {
             }
             Thread.sleep(400)
         }
-        Log.e(TAG, "timed out waiting for the proxy")
+        Log.e(TAG, "timed out after " + READY_TIMEOUT_MS + "ms waiting for the proxy")
+        dumpOutput()
         return false
+    }
+
+    private val lastOutput = ArrayDeque<String>()
+
+    private fun dumpOutput() {
+        val tail = synchronized(lastOutput) { lastOutput.toList() }
+        if (tail.isEmpty()) {
+            Log.e(TAG, "no output was produced by the binary")
+        } else {
+            Log.e(TAG, "last " + tail.size + " lines from aether:")
+            tail.forEach { Log.e(TAG, "  | " + it) }
+        }
     }
 
     fun stop() {

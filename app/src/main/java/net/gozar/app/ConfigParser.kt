@@ -26,27 +26,40 @@ object ConfigParser {
     }
 
     fun parseJsonOutbounds(text: String, source: ConfigSource = ConfigSource.PERSONAL): List<ProxyConfig> {
-        val nodes = mutableListOf<JSONObject>()
+        val nodes = mutableListOf<Pair<JSONObject, String>>()
+
+        fun collect(o: JSONObject) {
+            val label = listOf("remarks", "remark", "name", "ps", "tag")
+                .firstNotNullOfOrNull { k -> o.optString(k).takeIf { it.isNotEmpty() } }
+                .orEmpty()
+            val arr = o.optJSONArray("outbounds")
+            if (arr != null) {
+                for (i in 0 until arr.length()) {
+                    arr.optJSONObject(i)?.let { nodes.add(it to label) }
+                }
+            } else {
+                nodes.add(o to "")
+            }
+        }
+
         runCatching {
             val t = text.trim()
             if (t.startsWith("[")) {
                 val arr = JSONArray(t)
-                for (i in 0 until arr.length()) arr.optJSONObject(i)?.let { nodes.add(it) }
+                for (i in 0 until arr.length()) arr.optJSONObject(i)?.let { collect(it) }
             } else {
-                val root = JSONObject(t)
-                val arr = root.optJSONArray("outbounds")
-                if (arr != null) {
-                    for (i in 0 until arr.length()) arr.optJSONObject(i)?.let { nodes.add(it) }
-                } else {
-                    nodes.add(root)
-                }
+                collect(JSONObject(t))
             }
         }.getOrElse { return emptyList() }
 
-        return nodes.mapNotNull { outboundToConfig(it, source) }
+        return nodes.mapNotNull { (node, label) -> outboundToConfig(node, source, label) }
     }
 
-    private fun outboundToConfig(o: JSONObject, source: ConfigSource): ProxyConfig? {
+    private fun outboundToConfig(
+        o: JSONObject,
+        source: ConfigSource,
+        parentLabel: String = ""
+    ): ProxyConfig? {
         val protocol = o.optString("protocol").lowercase()
         if (protocol.isEmpty()) return null
         if (protocol in setOf("freedom", "blackhole", "dns", "tun", "loopback")) return null
@@ -150,7 +163,8 @@ object ConfigParser {
         val alpn = if (alpnArr == null) "" else
             (0 until alpnArr.length()).joinToString(",") { alpnArr.optString(it) }
 
-        val name = tag.takeIf { it.isNotEmpty() && it != "proxy" }
+        val name = parentLabel.takeIf { it.isNotEmpty() }
+            ?: tag.takeIf { it.isNotEmpty() && it != "proxy" }
             ?: (if (sni.isNotEmpty()) sni else "$address:$port")
 
         return ProxyConfig(

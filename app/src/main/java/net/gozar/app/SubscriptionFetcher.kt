@@ -50,11 +50,7 @@ object SubscriptionFetcher {
                 val body = conn.inputStream.use { it.readBytes().toString(Charsets.UTF_8) }
                 val userInfo = parseUserInfo(conn.getHeaderField("subscription-userinfo"))
                 val text = decodeMaybeBase64(body)
-                val configs = text.lineSequence()
-                    .map { it.trim() }
-                    .filter { it.isNotEmpty() }
-                    .mapNotNull { ConfigParser.parse(it, source) }
-                    .toList()
+                val configs = ConfigParser.parseBundle(text, source)
                 if (configs.isEmpty()) throw classify(text)
                 FetchResult(configs, userInfo)
             } finally {
@@ -119,22 +115,30 @@ object SubscriptionFetcher {
     }
 
     private val SCHEMES = listOf(
-        "vless://", "vmess://", "trojan://", "ss://", "socks5://", "socks://",
-        "hysteria2://", "hy2://", "ikev2://", "wireguard://", "wg://"
+        "vless://", "vmess://", "trojan://", "ss://", "ssr://",
+        "socks5://", "socks4://", "socks://", "http://",
+        "hysteria2://", "hysteria://", "hy2://", "hy://", "tuic://",
+        "ikev2://", "wireguard://", "wg://", "warp://", "juicity://",
+        "anytls://", "mieru://", "naive+"
     )
 
     private fun hasConfig(text: String): Boolean {
         val lower = text.lowercase()
-        return SCHEMES.any { lower.contains(it) }
+        if (SCHEMES.any { lower.contains(it) }) return true
+        val t = text.trim()
+        return (t.startsWith("{") || t.startsWith("[")) &&
+                (lower.contains("\"outbounds\"") || lower.contains("\"protocol\""))
     }
 
     private fun classify(text: String): SubscriptionError {
-        val lower = text.trim().lowercase()
+        val t = text.trim()
+        val lower = t.lowercase()
+        val isYaml = !t.startsWith("{") && !t.startsWith("[") &&
+                (lower.contains("proxy-groups:") ||
+                        Regex("(?m)^\\s*proxies:\\s*\$").containsMatchIn(lower))
         return when {
-            lower.isEmpty() -> SubscriptionError(SubscriptionError.Kind.EMPTY)
-            lower.contains("proxies:") || lower.contains("proxy-groups:") ||
-                    lower.contains("\"outbounds\"") ->
-                SubscriptionError(SubscriptionError.Kind.CLASH)
+            t.isEmpty() -> SubscriptionError(SubscriptionError.Kind.EMPTY)
+            isYaml -> SubscriptionError(SubscriptionError.Kind.CLASH)
             else -> SubscriptionError(SubscriptionError.Kind.NOT_CONFIG)
         }
     }

@@ -627,8 +627,8 @@ object WindscribeBrand {
     fun isWindscribe(sub: Subscription): Boolean {
         val n = sub.name.trim()
         return n.equals(SUB_NAME, ignoreCase = true) ||
-            n.startsWith("$SUB_NAME -", ignoreCase = true) ||
-            n.startsWith("$SUB_NAME-", ignoreCase = true)
+                n.startsWith("$SUB_NAME -", ignoreCase = true) ||
+                n.startsWith("$SUB_NAME-", ignoreCase = true)
     }
 
     fun displayName(sub: Subscription, lang: Lang): String =
@@ -2393,7 +2393,7 @@ private fun ConfigPickerScreen(
             )
         }
         val isBad = statusLine.isNotEmpty() &&
-            badLines.any { it.isNotEmpty() && statusLine.startsWith(it) }
+                badLines.any { it.isNotEmpty() && statusLine.startsWith(it) }
         val statusAccent =
             if (isBad) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
 
@@ -3822,10 +3822,10 @@ private fun WindscribeScreen(store: ConfigStore, modifier: Modifier = Modifier) 
                         expanded = locationsOpen,
                         searchOpen = searchOpen,
                         allSelected = shown.isNotEmpty() &&
-                            shown.all { picked[it.hostname] == true },
+                                shown.all { picked[it.hostname] == true },
                         onSelectAll = {
                             val target = !(shown.isNotEmpty() &&
-                                shown.all { picked[it.hostname] == true })
+                                    shown.all { picked[it.hostname] == true })
                             shown.forEach { node ->
                                 if (target) picked[node.hostname] = true
                                 else picked.remove(node.hostname)
@@ -6431,7 +6431,11 @@ private fun redactSecrets(text: String, secrets: List<ProxyConfig>): String {
 private fun readLogcat(): String = try {
     val proc = Runtime.getRuntime().exec(arrayOf(
         "logcat", "-d", "-v", "time",
-        "XrayCore:V", "GoLog:V", "GozarVpnService:V", "*:S"
+        "XrayCore:V", "GoLog:V", "GozarVpnService:V",
+        "Aether:V", "Tor:V", "GRouteIke:V",
+        "charon:V", "CharonVpnService:V",
+        "GRouteAuto:V", "GRouteQr:V", "GRouteHaptic:V",
+        "*:S"
     ))
     val lines = proc.inputStream.bufferedReader().readLines()
         .filterNot { it.startsWith("---------") }
@@ -8400,7 +8404,7 @@ private fun quotaChips(sub: Subscription, lang: Lang): List<Pair<String, Int>> {
         }
         parts.add(
             "${formatBytes(remaining, lang)} ${Strings.get(lang, "of")} " +
-                "${formatBytes(sub.total, lang)} ${Strings.get(lang, "left")}" to level
+                    "${formatBytes(sub.total, lang)} ${Strings.get(lang, "left")}" to level
         )
     }
     if (sub.expire > 0) {
@@ -8413,7 +8417,7 @@ private fun quotaChips(sub: Subscription, lang: Lang): List<Pair<String, Int>> {
             }
             parts.add(
                 "${Strings.get(lang, "expires_in")} " +
-                    "${localizeDigits("$daysLeft", lang)}${Strings.get(lang, "unit_days")}" to level
+                        "${localizeDigits("$daysLeft", lang)}${Strings.get(lang, "unit_days")}" to level
             )
         }
     }
