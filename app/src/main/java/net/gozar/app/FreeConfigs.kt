@@ -24,6 +24,7 @@ object FreeConfigs {
     private const val TAG = "GRouteFree"
     private const val CONCURRENCY = 16
     private const val MESSAGES = 50
+    private const val MAX_TEST = 200
     private const val MAX_PAGES = 8
     private const val HTTP_TIMEOUT = 12_000
     private const val MEASURE_TIMEOUT_MS = 20_000L
@@ -140,8 +141,17 @@ object FreeConfigs {
                 android.util.Log.w(TAG, "no parsable configs in ${found.messages} messages")
                 return NO_CONFIGS
             }
-            val alive = measureAll(found.configs)
             val existing = subscriptionOf(store)
+            val current = if (existing == null) emptyList()
+            else store.configs.value.filter { it.subId == existing.id }
+
+            val merged = (current + found.configs).distinctBy { sig(it) }.take(MAX_TEST)
+            android.util.Log.i(
+                TAG,
+                "kept=${current.size} scraped=${found.configs.size} merged=${merged.size}"
+            )
+
+            val alive = measureAll(merged)
             val sub = (existing ?: Subscription(name = label, url = SOURCE_URL))
                 .copy(lastUpdated = System.currentTimeMillis())
             if (alive.isNotEmpty() || existing != null) store.upsertSubscription(sub, alive)
