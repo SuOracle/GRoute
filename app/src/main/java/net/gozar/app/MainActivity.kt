@@ -6852,7 +6852,7 @@ private fun AboutChip(label: String, value: String) {
         Text(
             mixedText(localizeDigits(value, LocalLang.current)),
             style = MaterialTheme.typography.labelMedium,
-            fontFamily = LexendFont,
+            fontFamily = if (LocalLang.current == Lang.FA) VazirFont else LexendFont,
             fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.primary,
             maxLines = 1
@@ -10014,7 +10014,7 @@ private fun PingChip(ping: PingResult?) {
             Text(
                 s,
                 style = MaterialTheme.typography.labelSmall,
-                fontFamily = LexendFont,
+                fontFamily = if (lang == Lang.FA) VazirFont else LexendFont,
                 fontWeight = FontWeight.SemiBold,
                 color = color,
                 maxLines = 1
@@ -10040,7 +10040,7 @@ private fun PingBadge(ping: PingResult?) {
     val t = stringsFn()
     val lang = LocalLang.current
     when (ping) {
-        is PingResult.Ok -> Text("${localizeDigits("${ping.ms}", lang)} ${t("unit_ms")}", style = MaterialTheme.typography.bodySmall, fontFamily = LexendFont, color = pingColor(ping))
+        is PingResult.Ok -> Text("${localizeDigits("${ping.ms}", lang)} ${t("unit_ms")}", style = MaterialTheme.typography.bodySmall, fontFamily = if (lang == Lang.FA) VazirFont else LexendFont, color = pingColor(ping))
         PingResult.Testing -> Text("…", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         PingResult.Failed -> Text(t("delay_failed"), style = MaterialTheme.typography.bodySmall, color = pingColor(ping))
         null -> {}
@@ -10204,7 +10204,7 @@ private fun AppProxyScreen(
                     Text(
                         localizeDigits("${filtered.size}", lang),
                         style = MaterialTheme.typography.labelMedium,
-                        fontFamily = LexendFont,
+                        fontFamily = if (lang == Lang.FA) VazirFont else LexendFont,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.primary
                     )
