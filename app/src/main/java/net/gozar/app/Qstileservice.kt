@@ -82,7 +82,8 @@ class QsTileService : TileService() {
             adBlock = store.adBlock.value,
             fakeDns = store.fakeDns.value,
             encryptedDns = store.encryptedDns.value,
-            onionRouting = store.onionRouting.value
+            onionRouting = store.onionRouting.value,
+            coreLogLevel = store.coreLogLevel.value
         )
         VpnState.setConnecting(config.id)
         val intent = Intent(this, GozarVpnService::class.java)

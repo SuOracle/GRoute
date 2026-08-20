@@ -860,7 +860,10 @@ object ConfigProbe {
             val sni = c.sni.trim()
                 .ifBlank { c.host.substringBefore(",").trim() }
                 .ifBlank { addr }
-            when (scanSni(sni)) {
+            val sniMustResolve = sec == "reality" || sni.equals(addr, ignoreCase = true)
+            if (!sniMustResolve) {
+                findings += check("dbg_part_sni", DebugLevel.OK, "", sni)
+            } else when (scanSni(sni)) {
                 SniScan.Ok -> findings += check("dbg_part_sni", DebugLevel.OK, "", sni)
                 SniScan.NoResolve -> tlsIssue = "dbg_sni_no_resolve"
                 SniScan.Hijacked -> tlsIssue = "dbg_sni_no_resolve"
@@ -871,11 +874,12 @@ object ConfigProbe {
                 else findings += check("dbg_part_sni", DebugLevel.WARN, "dbg_sni_no_tls13", sni)
             }
 
-            val tls = tlsProbe(addr, port, sni, sec == "tls")
+            val pinned = CertPin.isValid(c.pinnedCertSha256)
+            val tls = tlsProbe(addr, port, sni, sec == "tls" && !pinned)
             when (tls.kind) {
-                Tls.Ok -> findings += check("dbg_part_tls", DebugLevel.OK, "", sni)
-                Tls.NameMismatch -> if (sec != "reality") tlsIssue = "dbg_sni_mismatch"
-                Tls.CertError -> if (sec != "reality") return ProbeResult(
+                Tls.Ok -> if (!pinned) findings += check("dbg_part_tls", DebugLevel.OK, "", sni)
+                Tls.NameMismatch -> if (sec != "reality" && !pinned) tlsIssue = "dbg_sni_mismatch"
+                Tls.CertError -> if (sec != "reality" && !pinned) return ProbeResult(
                     DebugState.BROKEN, ping,
                     if (c.allowInsecure) "dbg_tls_cert_insecure" else "dbg_tls_cert",
                     findings + check(
@@ -885,6 +889,27 @@ object ConfigProbe {
                 )
                 Tls.Reset -> if (sec != "reality") tlsIssue = "dbg_sni_blocked"
                 Tls.Timeout -> if (sec != "reality") tlsIssue = "dbg_sni_timeout"
+            }
+
+            if (pinned) {
+                val actual = CertPin.fetch(addr, port, sni)
+                val expected = c.pinnedCertSha256.split(',')
+                    .map { it.trim().replace(":", "").lowercase() }
+                    .filter { it.isNotEmpty() }
+                when {
+                    actual == null -> findings += check(
+                        "dbg_part_pin", DebugLevel.WARN, "dbg_pin_unreachable", sni
+                    )
+                    actual.lowercase() in expected -> findings += check(
+                        "dbg_part_pin", DebugLevel.OK, "", actual.take(16)
+                    )
+                    else -> return ProbeResult(
+                        DebugState.BROKEN, ping, "dbg_pin_mismatch",
+                        findings + check(
+                            "dbg_part_pin", DebugLevel.BAD, "dbg_pin_mismatch", actual.take(16)
+                        )
+                    )
+                }
             }
         }
 

@@ -36,3 +36,9 @@
 -keepclassmembers class * extends android.app.Service {
     <init>();
 }
+
+-keep class com.jcraft.jsch.** { *; }
+-dontwarn com.jcraft.jsch.**
+-dontwarn org.slf4j.**
+-dontwarn org.bouncycastle.**
+-dontwarn org.apache.**

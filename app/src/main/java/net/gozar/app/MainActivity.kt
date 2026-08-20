@@ -14,6 +14,12 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.calculateEndPadding
+import androidx.compose.foundation.layout.calculateStartPadding
+import androidx.compose.foundation.layout.ime
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.foundation.layout.offset
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.ui.text.font.FontWeight
@@ -132,6 +138,7 @@ import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Radar
 import androidx.compose.material.icons.filled.Router
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.ArrowDownward
@@ -147,6 +154,7 @@ import androidx.compose.material.icons.filled.Contrast
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.Cancel
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Schedule
@@ -319,6 +327,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
@@ -465,6 +474,13 @@ private val AppAqua: Color
         else Color(0xFF067E9B)
 
 internal val LocalLang = compositionLocalOf { Lang.EN }
+
+private const val PAGE_SHOP = 0
+private const val PAGE_SSH = 1
+private const val PAGE_HOME = 2
+private const val PAGE_DEBUG = 3
+private const val PAGE_SETTINGS = 4
+private const val PAGE_COUNT = 5
 
 @Composable
 private fun stringsFn(): (String) -> String {
@@ -738,10 +754,10 @@ class MainActivity : ComponentActivity() {
             })
             withContext(Dispatchers.Main) { warm() }
         }
+        startAutoSwitch()
         lifecycleScope.launch {
-            store.configs.collect { list ->
-                val anyLocked = list.any { it.locked }
-                if (anyLocked) {
+            SecureScreen.on.collect { secure ->
+                if (secure) {
                     window.setFlags(
                         android.view.WindowManager.LayoutParams.FLAG_SECURE,
                         android.view.WindowManager.LayoutParams.FLAG_SECURE
@@ -781,7 +797,7 @@ class MainActivity : ComponentActivity() {
                     }
                     Box {
                         if (startMain) {
-                            GozarApp(store = store, onConnect = ::connectTo, onDisconnect = ::disconnect, onSwitch = ::switchTo)
+                            GozarApp(store = store, onConnect = ::connectTo, onDisconnect = ::disconnect, onSwitch = ::switchTo, onCancelPick = ::cancelPick)
                         }
                         AnimatedVisibility(
                             visible = showWelcome,
@@ -821,9 +837,23 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun connectTo(config: ProxyConfig) {
-        val s = VpnState.state.value
-        if (s == Connection.CONNECTING || s == Connection.CONNECTED) return
+    private fun launchConnect(config: ProxyConfig) {
+        if (config.allowInsecure && !CertPin.isValid(config.pinnedCertSha256) &&
+            config.security.trim().lowercase() == "tls"
+        ) {
+            VpnState.setConnecting(config.id)
+            lifecycleScope.launch {
+                val pin = CertPin.fetch(config.address, config.port, config.sni)
+                val ready = if (pin.isNullOrBlank()) config
+                else config.copy(pinnedCertSha256 = pin).also { store.update(it) }
+                proceedLaunch(ready)
+            }
+            return
+        }
+        proceedLaunch(config)
+    }
+
+    private fun proceedLaunch(config: ProxyConfig) {
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU &&
             checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
             android.content.pm.PackageManager.PERMISSION_GRANTED
@@ -833,6 +863,40 @@ class MainActivity : ComponentActivity() {
         } else {
             proceedConnect(config)
         }
+    }
+
+    private fun connectTo(config: ProxyConfig) {
+        val s = VpnState.state.value
+        if (s == Connection.CONNECTING || s == Connection.CONNECTED) return
+
+        if (!store.autoSelect.value) {
+            launchConnect(config)
+            return
+        }
+
+        pickJob?.cancel()
+        pickJob = lifecycleScope.launch {
+            VpnState.setPicking(true)
+            val best = try {
+                AutoSelector(applicationContext, store).pickFastest()
+            } catch (e: CancellationException) {
+                VpnState.setPicking(false)
+                throw e
+            } catch (e: Exception) {
+                null
+            }
+            ensureActive()
+            val chosen = best ?: config
+            if (chosen.id != config.id) store.setSelectedId(chosen.id)
+            VpnState.setPicking(false)
+            launchConnect(chosen)
+        }
+    }
+
+    private fun cancelPick() {
+        pickJob?.cancel()
+        pickJob = null
+        VpnState.setPicking(false)
     }
 
     private fun watchTunnel() {
@@ -857,11 +921,80 @@ class MainActivity : ComponentActivity() {
 
     private fun t2(key: String): String = Strings.get(store.lang.value, key)
 
+
+    private var pickJob: Job? = null
+    private var autoSwitchJob: Job? = null
+    private val AUTO_SWITCH_MS = 60_000L
+    private val AUTO_SWITCH_MARGIN_MS = 40
+    private val AUTO_SWITCH_PROBE_MS = 25_000L
+
+    private fun startAutoSwitch() {
+        if (autoSwitchJob?.isActive == true) return
+        autoSwitchJob = lifecycleScope.launch {
+            val selector = AutoSelector(applicationContext, store)
+            while (isActive) {
+                delay(AUTO_SWITCH_MS)
+                val tag = "GRouteAuto"
+                if (!store.autoSelect.value) {
+                    android.util.Log.d(tag, "skip: smart connect is off"); continue
+                }
+                if (VpnState.state.value != Connection.CONNECTED) {
+                    android.util.Log.d(tag, "skip: state is ${VpnState.state.value}"); continue
+                }
+                if (VpnState.picking.value) {
+                    android.util.Log.d(tag, "skip: a pick is already running"); continue
+                }
+
+                val activeId = VpnState.activeId.value ?: store.selectedId.value
+                if (activeId == null) {
+                    android.util.Log.d(tag, "skip: no active config id"); continue
+                }
+                val activeCfg = store.configs.value.find { it.id == activeId }
+                if (activeCfg?.protocol?.trim()?.lowercase() in setOf("tor", "aether")) {
+                    android.util.Log.d(tag, "skip: active is ${activeCfg?.protocol}"); continue
+                }
+
+                val best = runCatching { selector.pickFastest(AUTO_SWITCH_PROBE_MS) }
+                    .onFailure { android.util.Log.w(tag, "probe threw", it) }
+                    .getOrNull()
+                if (best == null) {
+                    android.util.Log.d(tag, "skip: no server responded to the probe"); continue
+                }
+
+                val results = selector.results.value
+                val bestMs = (results[best.id] as? PingResult.Ok)?.ms
+                val currentMs = (results[activeId] as? PingResult.Ok)?.ms
+                android.util.Log.d(
+                    tag,
+                    "active=${activeCfg?.name} ${currentMs}ms  best=${best.name} ${bestMs}ms"
+                )
+
+                if (best.id == activeId) {
+                    android.util.Log.d(tag, "skip: already on the fastest"); continue
+                }
+                if (bestMs == null) {
+                    android.util.Log.d(tag, "skip: best has no timing"); continue
+                }
+                if (currentMs != null && currentMs - bestMs < AUTO_SWITCH_MARGIN_MS) {
+                    android.util.Log.d(
+                        tag,
+                        "skip: gain ${currentMs - bestMs}ms under margin $AUTO_SWITCH_MARGIN_MS"
+                    ); continue
+                }
+
+                android.util.Log.d(tag, "SWITCHING to ${best.name}")
+                store.setSelectedId(best.id)
+                switchTo(best)
+            }
+        }
+    }
+
     private fun proceedConnect(config: ProxyConfig) {
         if (VpnState.state.value == Connection.CONNECTED) return
         if (config.protocol == "ikev2") {
+            val xrayWasUp = VpnState.state.value != Connection.DISCONNECTED
             IkeController.claim(config)
-            if (VpnState.state.value != Connection.DISCONNECTED) startService(
+            if (xrayWasUp) startService(
                 Intent(this, GozarVpnService::class.java).setAction(GozarVpnService.ACTION_STOP)
             )
             val startIke = {
@@ -884,7 +1017,8 @@ class MainActivity : ComponentActivity() {
                 store.configs.value.find { it.id == config.torBaseId } else null,
             chainBase = if (config.chainId.isNotEmpty())
                 store.configs.value.find { it.id == config.chainId } else null,
-            onionRouting = store.onionRouting.value)
+            onionRouting = store.onionRouting.value,
+            coreLogLevel = store.coreLogLevel.value)
         VpnState.setConnecting(config.id)
         val aether = if (config.protocol == "aether") AetherController.spec(config) else ""
         val intent = VpnService.prepare(this)
@@ -920,7 +1054,8 @@ class MainActivity : ComponentActivity() {
             adBlock = true,
             directOnly = true,
             fakeDns = store.fakeDns.value,
-            encryptedDns = store.encryptedDns.value
+            encryptedDns = store.encryptedDns.value,
+            coreLogLevel = store.coreLogLevel.value
         )
         startTunnel(json, Strings.get(store.lang.value, "adblock_notif"), "", null)
     }
@@ -936,14 +1071,15 @@ class MainActivity : ComponentActivity() {
 
     private fun switchTo(config: ProxyConfig) {
         val s = VpnState.state.value
-        if (s != Connection.CONNECTED && s != Connection.CONNECTING) { connectTo(config); return }
+        if (s != Connection.CONNECTED && s != Connection.CONNECTING) { launchConnect(config); return }
         lifecycleScope.launch {
-            startService(Intent(this@MainActivity, GozarVpnService::class.java).setAction(GozarVpnService.ACTION_STOP))
+            disconnect()
             withTimeoutOrNull(6000) {
                 VpnState.state.first { it == Connection.DISCONNECTED || it == Connection.ERROR }
             }
+            if (VpnState.state.value == Connection.CONNECTED) VpnState.setDisconnected()
             delay(400)
-            connectTo(config)
+            launchConnect(config)
         }
     }
 
@@ -963,7 +1099,8 @@ private fun GozarApp(
     store: ConfigStore,
     onConnect: (ProxyConfig) -> Unit,
     onDisconnect: () -> Unit,
-    onSwitch: (ProxyConfig) -> Unit
+    onSwitch: (ProxyConfig) -> Unit,
+    onCancelPick: () -> Unit = {}
 ) {
     val t = stringsFn()
     val scope = rememberCoroutineScope()
@@ -973,7 +1110,7 @@ private fun GozarApp(
         ThemeMode.DARK, ThemeMode.AMOLED -> true
         else -> isSystemInDarkTheme()
     }
-    val pagerState = rememberPagerState(initialPage = 1, pageCount = { 4 })
+    val pagerState = rememberPagerState(initialPage = PAGE_HOME, pageCount = { PAGE_COUNT })
     val settingsScroll = rememberScrollState()
 
     var showPicker by remember { mutableStateOf(false) }
@@ -1120,21 +1257,23 @@ private fun GozarApp(
         }
     }
 
+    var sshSubScreen by remember { mutableStateOf(false) }
     val page = pagerState.currentPage
-    val onSettingsTab = page == 3
-    val subScreenOpen = (page == 1 && (showPicker || showManual || showProjects || showTorNodes || showWindscribe || showScanner || exportConfigs != null)) || (onSettingsTab && (usageDetail || perAppDetail || logsDetail || stabilityDetail || aboutDetail || cleanIpDetail || themeDetail || toolsDetail || connDetail || prefsDetail || netMonDetail || netCatDetail || netCatIndex >= 0 || checkHostDetail))
+    val onSettingsTab = page == PAGE_SETTINGS
+    val subScreenOpen = (page == PAGE_SSH && sshSubScreen) || (page == PAGE_HOME && (showPicker || showManual || showProjects || showTorNodes || showWindscribe || showScanner || exportConfigs != null)) || (onSettingsTab && (usageDetail || perAppDetail || logsDetail || stabilityDetail || aboutDetail || cleanIpDetail || themeDetail || toolsDetail || connDetail || prefsDetail || netMonDetail || netCatDetail || netCatIndex >= 0 || checkHostDetail))
 
     val screenKey = when {
-        page == 0 -> "shop"
-        page == 1 && exportConfigs != null -> "export"
-        page == 1 && showManual -> "manual"
-        page == 1 && showTorNodes -> "tornodes"
-        page == 1 && showScanner -> "scanqr"
-        page == 1 && showWindscribe -> "windscribe"
-        page == 1 && showProjects -> "projects"
-        page == 1 && showPicker -> "picker"
-        page == 1 -> "connection"
-        page == 2 -> "debugger"
+        page == PAGE_SHOP -> "shop"
+        page == PAGE_SSH -> "ssh"
+        page == PAGE_HOME && exportConfigs != null -> "export"
+        page == PAGE_HOME && showManual -> "manual"
+        page == PAGE_HOME && showTorNodes -> "tornodes"
+        page == PAGE_HOME && showScanner -> "scanqr"
+        page == PAGE_HOME && showWindscribe -> "windscribe"
+        page == PAGE_HOME && showProjects -> "projects"
+        page == PAGE_HOME && showPicker -> "picker"
+        page == PAGE_HOME -> "connection"
+        page == PAGE_DEBUG -> "debugger"
         onSettingsTab && usageDetail -> "usage"
         onSettingsTab && perAppDetail -> "perapp"
         onSettingsTab && logsDetail -> "logs"
@@ -1175,11 +1314,12 @@ private fun GozarApp(
             toolsDetail -> toolsDetail = false
             connDetail -> connDetail = false
             prefsDetail -> prefsDetail = false
-            page != 1 -> scope.launch { pagerState.animateScrollToPage(1) }
+            page == PAGE_SSH && sshSubScreen -> Unit
+            page != PAGE_HOME -> scope.launch { pagerState.animateScrollToPage(PAGE_HOME) }
         }
     }
 
-    val canGoBack = subScreenOpen || page != 1
+    val canGoBack = subScreenOpen || page != PAGE_HOME
     var backProgress by remember { mutableStateOf(0f) }
 
     PredictiveBackHandler(enabled = canGoBack) { progress ->
@@ -1251,9 +1391,11 @@ private fun GozarApp(
                                 "connection_settings" -> t("connection_settings")
                                 "preferences" -> t("preferences")
                                 "shop" -> t("shop")
+                                "ssh" -> t("ssh")
                                 "debugger" -> t("debugger_title")
                                 else -> t("settings")
-                            })
+                            }),
+                            fontFamily = AntaFont
                         )
                     }
                 },
@@ -1307,28 +1449,34 @@ private fun GozarApp(
         bottomBar = {
             NavigationBar {
                 NavigationBarItem(
-                    selected = page == 0,
-                    onClick = { scope.launch { pagerState.animateScrollToPage(0) } },
+                    selected = page == PAGE_SHOP,
+                    onClick = { scope.launch { pagerState.animateScrollToPage(PAGE_SHOP) } },
                     icon = { Icon(Icons.Filled.ShoppingBag, contentDescription = null) },
                     label = { Text(t("shop")) }
                 )
                 NavigationBarItem(
-                    selected = page == 1,
+                    selected = page == PAGE_SSH,
+                    onClick = { scope.launch { pagerState.animateScrollToPage(PAGE_SSH) } },
+                    icon = { Icon(Icons.Filled.Terminal, contentDescription = null) },
+                    label = { Text(t("ssh")) }
+                )
+                NavigationBarItem(
+                    selected = page == PAGE_HOME,
                     onClick = {
                         showPicker = false; showManual = false; showProjects = false; showTorNodes = false; showWindscribe = false; editingConfig = null
-                        scope.launch { pagerState.animateScrollToPage(1) }
+                        scope.launch { pagerState.animateScrollToPage(PAGE_HOME) }
                     },
                     icon = { Icon(Icons.Rounded.Home, contentDescription = null) },
                     label = { Text(t("home")) }
                 )
                 NavigationBarItem(
-                    selected = page == 2,
-                    onClick = { scope.launch { pagerState.animateScrollToPage(2) } },
+                    selected = page == PAGE_DEBUG,
+                    onClick = { scope.launch { pagerState.animateScrollToPage(PAGE_DEBUG) } },
                     icon = { Icon(Icons.Filled.BugReport, contentDescription = null) },
                     label = { Text(t("debugger")) }
                 )
                 NavigationBarItem(
-                    selected = page == 3,
+                    selected = page == PAGE_SETTINGS,
                     onClick = {
                         usageDetail = false
                         perAppDetail = false
@@ -1344,7 +1492,7 @@ private fun GozarApp(
                         toolsDetail = false
                         connDetail = false
                         prefsDetail = false
-                        scope.launch { pagerState.animateScrollToPage(3) }
+                        scope.launch { pagerState.animateScrollToPage(PAGE_SETTINGS) }
                     },
                     icon = { Icon(Icons.Filled.Settings, contentDescription = null) },
                     label = { Text(t("settings")) }
@@ -1352,20 +1500,32 @@ private fun GozarApp(
             }
         }
     ) { padding ->
+        val imeBottom = WindowInsets.ime.asPaddingValues().calculateBottomPadding()
+        val layoutDir = LocalLayoutDirection.current
         HorizontalPager(
             state = pagerState,
             userScrollEnabled = !subScreenOpen,
             modifier = Modifier
-                .padding(padding)
+                .padding(
+                    start = padding.calculateStartPadding(layoutDir),
+                    end = padding.calculateEndPadding(layoutDir),
+                    top = padding.calculateTopPadding(),
+                    bottom = maxOf(padding.calculateBottomPadding(), imeBottom)
+                )
                 .graphicsLayer {
                     scaleX = contentScale
                     scaleY = contentScale
                     alpha = contentAlpha
                 }
         ) { p ->
-            if (p == 0) {
+            if (p == PAGE_SHOP) {
                 ShopScreen()
-            } else if (p == 1) {
+            } else if (p == PAGE_SSH) {
+                SshScreen(
+                    store = SshStore.get(LocalContext.current),
+                    onSubScreenChange = { sshSubScreen = it }
+                )
+            } else if (p == PAGE_HOME) {
                 val connKey = when {
                     exportConfigs != null -> "export"
                     showManual -> "manual"
@@ -1434,11 +1594,12 @@ private fun GozarApp(
                             selectedId = selectedId,
                             onOpenPicker = { showPicker = true },
                             onConnect = onConnect,
-                            onDisconnect = onDisconnect
+                            onDisconnect = onDisconnect,
+                            onCancelPick = onCancelPick
                         )
                     }
                 }
-            } else if (p == 2) {
+            } else if (p == PAGE_DEBUG) {
                 ConfigDebuggerScreen(
                     store = store,
                     onSwitch = onSwitch,
@@ -1519,6 +1680,16 @@ private fun GozarApp(
     }
 }
 
+private const val PICKING_LABEL = "__picking__"
+
+@Composable
+fun SecureWhile(active: Boolean, key: String) {
+    DisposableEffect(active, key) {
+        if (active) SecureScreen.acquire(key)
+        onDispose { SecureScreen.release(key) }
+    }
+}
+
 @Composable
 private fun ConnectionScreen(
     store: ConfigStore,
@@ -1526,6 +1697,7 @@ private fun ConnectionScreen(
     onOpenPicker: () -> Unit,
     onConnect: (ProxyConfig) -> Unit,
     onDisconnect: () -> Unit,
+    onCancelPick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val t = stringsFn()
@@ -1534,6 +1706,7 @@ private fun ConnectionScreen(
     val configs by store.configs.collectAsState()
     val conn by VpnState.state.collectAsState()
     val activeCfgId by VpnState.activeId.collectAsState()
+    val picking by VpnState.picking.collectAsState()
 
     val mixedPortValue by store.mixedPort.collectAsState()
     LaunchedEffect(mixedPortValue) { MixedPort.value = mixedPortValue }
@@ -1790,9 +1963,12 @@ private fun ConnectionScreen(
                                 )
                             )
                             .border(1.6.dp, stateTint.copy(alpha = 0.70f), RoundedCornerShape(20.dp))
-                            .clickable(enabled = enabled) {
-                                if (connected) onDisconnect()
-                                else selectedConfig?.let { onConnect(it) }
+                            .clickable(enabled = enabled || picking) {
+                                when {
+                                    picking -> onCancelPick()
+                                    connected -> onDisconnect()
+                                    else -> selectedConfig?.let { onConnect(it) }
+                                }
                             },
                         contentAlignment = Alignment.Center
                     ) {
@@ -1802,7 +1978,7 @@ private fun ConnectionScreen(
                             modifier = Modifier.matchParentSize()
                         )
                         AnimatedContent(
-                            targetState = conn,
+                            targetState = if (picking) PICKING_LABEL else conn.name,
                             transitionSpec = {
                                 (slideInVertically(tween(340, easing = FastOutSlowInEasing)) { it / 2 } +
                                         fadeIn(tween(340))) togetherWith
@@ -1811,7 +1987,19 @@ private fun ConnectionScreen(
                             },
                             label = "connLabel",
                             modifier = Modifier.fillMaxSize()
-                        ) { state ->
+                        ) { key ->
+                            val isPicking = key == PICKING_LABEL
+                            val spinning = isPicking || key == Connection.CONNECTING.name
+                            val spin by rememberInfiniteTransition(label = "connSpin")
+                                .animateFloat(
+                                    initialValue = 0f,
+                                    targetValue = 360f,
+                                    animationSpec = infiniteRepeatable(
+                                        tween(900, easing = LinearEasing),
+                                        RepeatMode.Restart
+                                    ),
+                                    label = "connSpinAngle"
+                                )
                             Row(
                                 Modifier.fillMaxSize(),
                                 horizontalArrangement = Arrangement.Center,
@@ -1819,19 +2007,23 @@ private fun ConnectionScreen(
                             ) {
                                 Icon(
                                     when {
-                                        state == Connection.CONNECTING -> Icons.Filled.Autorenew
-                                        state == Connection.CONNECTED -> Icons.Filled.PowerSettingsNew
+                                        isPicking -> Icons.Filled.Autorenew
+                                        key == Connection.CONNECTING.name -> Icons.Filled.Autorenew
+                                        key == Connection.CONNECTED.name -> Icons.Filled.PowerSettingsNew
                                         else -> Icons.Filled.Bolt
                                     },
                                     contentDescription = null,
                                     tint = stateTint,
-                                    modifier = Modifier.size(22.dp)
+                                    modifier = Modifier
+                                        .size(22.dp)
+                                        .graphicsLayer { rotationZ = if (spinning) spin else 0f }
                                 )
                                 Spacer(Modifier.width(10.dp))
                                 Text(
                                     when {
-                                        state == Connection.CONNECTING -> t("connecting_cancel")
-                                        state == Connection.CONNECTED -> t("disconnect")
+                                        isPicking -> t("finding_fastest")
+                                        key == Connection.CONNECTING.name -> t("connecting_cancel")
+                                        key == Connection.CONNECTED.name -> t("disconnect")
                                         else -> t("connect")
                                     },
                                     style = MaterialTheme.typography.titleMedium,
@@ -2473,6 +2665,17 @@ private fun ConfigPickerScreen(
                         onRefresh = {
                             subStatus = t("fetching_sub")
                             scope.launch {
+                                if (sub.url == FreeConfigs.SOURCE_URL) {
+                                    val kept = FreeConfigs.refresh(store, sub.name)
+                                    subStatus = when {
+                                        kept > 0 -> t("proj_free_added").format(kept)
+                                        kept == FreeConfigs.UNREACHABLE -> t("proj_free_unreachable")
+                                        kept == FreeConfigs.NO_CONFIGS -> t("proj_free_nocfg")
+                                        kept == FreeConfigs.BUSY -> t("proj_free_working")
+                                        else -> t("proj_free_none")
+                                    }
+                                    return@launch
+                                }
                                 try {
                                     val result = SubscriptionFetcher.fetchFull(sub.url)
                                     val info = result.userInfo
@@ -2976,6 +3179,19 @@ private fun ManualConfigScreen(
     var mode by remember { mutableStateOf(existing?.mode ?: "") }
     var alpn by remember { mutableStateOf(existing?.alpn ?: "") }
     var fingerprint by remember { mutableStateOf(existing?.fingerprint ?: "chrome") }
+    var allowInsecure by remember { mutableStateOf(existing?.allowInsecure ?: false) }
+    var pinnedCert by remember { mutableStateOf(existing?.pinnedCertSha256 ?: "") }
+    var pinning by remember { mutableStateOf(false) }
+    val pinScope = rememberCoroutineScope()
+    LaunchedEffect(Unit) {
+        if (allowInsecure && !CertPin.isValid(pinnedCert) && address.isNotBlank()) {
+            pinning = true
+            pinnedCert = CertPin.fetch(
+                address.trim(), port.toIntOrNull() ?: 0, sni.trim()
+            ).orEmpty()
+            pinning = false
+        }
+    }
     var hyObfsPassword by remember { mutableStateOf(existing?.hyObfsPassword ?: "") }
     var hyUp by remember { mutableStateOf(if ((existing?.hyUpMbps ?: 0) > 0) "${existing?.hyUpMbps}" else "") }
     var hyDown by remember { mutableStateOf(if ((existing?.hyDownMbps ?: 0) > 0) "${existing?.hyDownMbps}" else "") }
@@ -3047,6 +3263,37 @@ private fun ManualConfigScreen(
             }
             if (security == "tls")
                 OutlinedTextField(alpn, { alpn = it }, label = { Text(t("alpn")) }, singleLine = true, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth())
+            if (security == "tls") {
+                SettingsGroup {
+                    SettingRow(
+                        title = t("allow_insecure"),
+                        subtitle = when {
+                            pinning -> t("pin_fetching")
+                            allowInsecure && CertPin.isValid(pinnedCert) -> t("pin_ready")
+                            allowInsecure -> t("pin_failed")
+                            else -> t("allow_insecure_sub")
+                        },
+                        checked = allowInsecure,
+                        enabled = !pinning,
+                        onCheckedChange = { on ->
+                            allowInsecure = on
+                            if (!on) {
+                                pinnedCert = ""
+                            } else {
+                                pinning = true
+                                pinScope.launch {
+                                    pinnedCert = CertPin.fetch(
+                                        address.trim(),
+                                        port.toIntOrNull() ?: 0,
+                                        sni.trim()
+                                    ).orEmpty()
+                                    pinning = false
+                                }
+                            }
+                        }
+                    )
+                }
+            }
             if (security == "reality") {
                 OutlinedTextField(publicKey, { publicKey = it }, label = { Text(t("public_key")) }, singleLine = true, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth())
                 OutlinedTextField(shortId, { shortId = it }, label = { Text(t("short_id")) }, singleLine = true, shape = RoundedCornerShape(16.dp), modifier = Modifier.fillMaxWidth())
@@ -3110,6 +3357,8 @@ private fun ManualConfigScreen(
                                 mode = mode.trim(),
                                 alpn = alpn.trim(),
                                 fingerprint = fingerprint.trim(),
+                                allowInsecure = allowInsecure,
+                                pinnedCertSha256 = pinnedCert,
                                 hyObfs = if (hyObfsPassword.isBlank()) "" else "salamander",
                                 hyObfsPassword = hyObfsPassword.trim(),
                                 hyUpMbps = hyUp.toIntOrNull() ?: 0,
@@ -3264,10 +3513,13 @@ private fun FreeProjectsScreen(
     val context = LocalContext.current
     var busy by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("") }
+    var statusOwner by remember { mutableStateOf("") }
     var aetherMode by remember { mutableStateOf("masque") }
     var aetherH2 by remember { mutableStateOf(true) }
 
-    LaunchedEffect(status) { if (status.isNotEmpty()) { delay(4000); status = "" } }
+    LaunchedEffect(status) {
+        if (status.isNotEmpty()) { delay(4000); status = ""; statusOwner = "" }
+    }
 
     Column(
         modifier.fillMaxSize()
@@ -3306,7 +3558,7 @@ private fun FreeProjectsScreen(
                 BounceButton(
                     onClick = {
                         if (busy) return@BounceButton
-                        busy = true; status = ""
+                        busy = true; status = ""; statusOwner = "warp"
                         scope.launch {
                             val result = withContext(Dispatchers.IO) { Warp.register() }
                             status = when (result) {
@@ -3322,17 +3574,20 @@ private fun FreeProjectsScreen(
                     enabled = !busy,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text(
-                        if (busy) t("adding") else t("add_warp"),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        softWrap = false
+                    ProjectButtonLabel(
+                        status = if (statusOwner == "warp") status else "",
+                        label = if (busy) t("adding") else t("add_warp")
                     )
                 }
             }
         }
 
-        SettingsGroup(t("proj_aether") + " (by @CluvexStudio)") {
+        SettingsGroup {
+            Text(
+                t("proj_aether_title"),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
             Text(
                 accentText(
                     t("proj_aether_desc"),
@@ -3371,7 +3626,7 @@ private fun FreeProjectsScreen(
             BounceButton(
                 onClick = {
                     if (!AetherController.available(context)) {
-                        status = t("proj_aether_missing")
+                        status = t("proj_aether_missing"); statusOwner = "aether"
                         return@BounceButton
                     }
                     val cfg = ProxyConfig(
@@ -3385,11 +3640,78 @@ private fun FreeProjectsScreen(
                         source = ConfigSource.COMMUNITY
                     )
                     store.add(cfg)
-                    status = t("proj_aether_added")
+                    status = t("proj_aether_added"); statusOwner = "aether"
                 },
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text(t("add"), maxLines = 1, overflow = TextOverflow.Ellipsis, softWrap = false)
+                ProjectButtonLabel(
+                    status = if (statusOwner == "aether") status else "",
+                    label = t("add")
+                )
+            }
+        }
+
+        Card(
+            shape = RoundedCornerShape(18.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+            ),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.30f)),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            val freeBusy by FreeConfigs.busy.collectAsState()
+            val freeProgress by FreeConfigs.progress.collectAsState()
+            val subs by store.subscriptions.collectAsState()
+            val added = subs.any { it.url == FreeConfigs.SOURCE_URL }
+
+            Column(
+                Modifier.fillMaxWidth().padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text(
+                    t("proj_free"),
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    t("proj_free_desc"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                val p = freeProgress
+                if (p != null) {
+                    Text(
+                        t("proj_free_testing").format(p.tested, p.total, p.alive),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                BounceButton(
+                    onClick = {
+                        scope.launch {
+                            val kept = FreeConfigs.refresh(store, t("proj_free"))
+                            statusOwner = "free"
+                            status = when {
+                                kept > 0 -> t("proj_free_added").format(kept)
+                                kept == FreeConfigs.UNREACHABLE -> t("proj_free_unreachable")
+                                kept == FreeConfigs.NO_CONFIGS -> t("proj_free_nocfg")
+                                kept == FreeConfigs.BUSY -> t("proj_free_working")
+                                else -> t("proj_free_none")
+                            }
+                        }
+                    },
+                    enabled = !freeBusy,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    ProjectButtonLabel(
+                        status = if (statusOwner == "free") status else "",
+                        label = when {
+                            freeBusy -> t("proj_free_working")
+                            added -> t("refresh")
+                            else -> t("add")
+                        }
+                    )
+                }
             }
         }
 
@@ -3404,20 +3726,28 @@ private fun FreeProjectsScreen(
             )
         )
 
-        AnimatedVisibility(
-            visible = status.isNotEmpty(),
-            enter = fadeIn(tween(220)) + expandVertically(tween(260, easing = FastOutSlowInEasing)),
-            exit = fadeOut(tween(160)) + shrinkVertically(tween(220, easing = FastOutSlowInEasing))
-        ) {
-            InfoBox(status, centered = true)
-        }
-
         Text(
             t("proj_more_soon"),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth()
+        )
+    }
+}
+
+@Composable
+private fun ProjectButtonLabel(status: String, label: String) {
+    AnimatedContent(
+        targetState = status.ifBlank { label },
+        transitionSpec = { fadeIn(tween(220)) togetherWith fadeOut(tween(140)) },
+        label = "projectButton"
+    ) { text ->
+        Text(
+            text,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center
         )
     }
 }
@@ -3724,6 +4054,7 @@ private fun WindscribeScreen(store: ConfigStore, modifier: Modifier = Modifier) 
     var nodes by remember { mutableStateOf<List<WindscribeNode>>(emptyList()) }
     val picked = remember { mutableStateMapOf<String, Boolean>() }
     var status by remember { mutableStateOf("") }
+    var statusOwner by remember { mutableStateOf("") }
     var query by remember { mutableStateOf("") }
 
     LaunchedEffect(Unit) {
@@ -4244,6 +4575,7 @@ private fun TorNodesScreen(store: ConfigStore, modifier: Modifier = Modifier) {
     val baseId = base?.id ?: ""
     var throughVpn by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("") }
+    var statusOwner by remember { mutableStateOf("") }
 
     LaunchedEffect(status) { if (status.isNotEmpty()) { delay(3000); status = "" } }
 
@@ -5009,6 +5341,7 @@ private fun BackupRow(store: ConfigStore) {
     val scope = rememberCoroutineScope()
 
     var status by remember { mutableStateOf("") }
+    var statusOwner by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var pending by remember { mutableStateOf<ByteArray?>(null) }
 
@@ -5487,7 +5820,7 @@ private fun ConfigDebuggerScreen(
             }
         }
 
-        SettingsGroup(t("dbg_checks")) {
+        SettingsGroup(t("dbg_client_checks")) {
             AnimatedVisibility(
                 visible = problems.isEmpty(),
                 enter = fadeIn(tween(280)) + expandVertically(tween(280, easing = FastOutSlowInEasing)),
@@ -5542,6 +5875,272 @@ private fun ConfigDebuggerScreen(
                     }
                 }
             }
+        }
+
+        ServerChecksGroup(config)
+        PanelChecksGroup(config)
+    }
+}
+
+@Composable
+private fun CollapsibleGroup(
+    title: String,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)
+        ),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.30f))
+    ) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp)) {
+            Row(
+                Modifier.fillMaxWidth().clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null
+                ) { onToggle() },
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    mixedText(title),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.weight(1f)
+                )
+                val angle by animateFloatAsState(
+                    targetValue = if (expanded) -90f else 0f,
+                    animationSpec = tween(260, easing = FastOutSlowInEasing),
+                    label = "groupChevron"
+                )
+                Icon(
+                    Icons.Filled.ChevronLeft,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(22.dp).graphicsLayer { rotationZ = angle }
+                )
+            }
+            AnimatedVisibility(
+                visible = expanded,
+                enter = expandVertically(tween(280, easing = FastOutSlowInEasing)) +
+                        fadeIn(tween(200, delayMillis = 60)),
+                exit = shrinkVertically(tween(240, easing = FastOutSlowInEasing)) +
+                        fadeOut(tween(120))
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Spacer(Modifier.height(2.dp))
+                    content()
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProbeCheckRow(check: DebugCheck, index: Int, stamp: Any?) {
+    val t = stringsFn()
+    val color = when (check.level) {
+        DebugLevel.OK -> AppGreen
+        DebugLevel.WARN -> Color(0xFFFFA94D)
+        DebugLevel.BAD -> MaterialTheme.colorScheme.error
+    }
+    val icon = when (check.level) {
+        DebugLevel.OK -> Icons.Filled.CheckCircle
+        DebugLevel.WARN -> Icons.Filled.Warning
+        DebugLevel.BAD -> Icons.Filled.Cancel
+    }
+    var shown by remember(stamp, index) { mutableStateOf(false) }
+    LaunchedEffect(stamp, index) {
+        delay(index * 45L)
+        shown = true
+    }
+    val fade by animateFloatAsState(
+        targetValue = if (shown) 1f else 0f,
+        animationSpec = tween(240, easing = FastOutSlowInEasing),
+        label = "probeFade"
+    )
+    val rise by animateFloatAsState(
+        targetValue = if (shown) 0f else 14f,
+        animationSpec = tween(280, easing = FastOutSlowInEasing),
+        label = "probeRise"
+    )
+    Row(
+        Modifier.fillMaxWidth().graphicsLayer { alpha = fade; translationY = rise },
+        verticalAlignment = Alignment.Top
+    ) {
+        Icon(
+            icon,
+            contentDescription = null,
+            tint = color,
+            modifier = Modifier.padding(top = 2.dp).size(18.dp)
+        )
+        Spacer(Modifier.width(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(t(check.partKey), style = MaterialTheme.typography.bodyMedium)
+            Text(
+                if (check.noteKey.isBlank()) check.value.ifBlank { "\u2014" } else t(check.noteKey),
+                style = MaterialTheme.typography.bodySmall,
+                color = if (check.level == DebugLevel.OK)
+                    MaterialTheme.colorScheme.onSurfaceVariant else color
+            )
+            if (check.noteKey.isNotBlank() && check.value.isNotBlank()) Text(
+                monoText(check.value),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun PanelChecksGroup(config: ProxyConfig) {
+    val t = stringsFn()
+    val context = LocalContext.current
+    val store = remember { SshStore.get(context) }
+    val scope = rememberCoroutineScope()
+
+    var expanded by remember(config.id) { mutableStateOf(false) }
+    var kind by remember(config.id) {
+        mutableStateOf(store.panelKind(config.id).ifBlank { "3x-ui" })
+    }
+    var url by remember(config.id) {
+        mutableStateOf(store.panelUrl(config.id).ifBlank { config.address })
+    }
+    var user by remember(config.id) { mutableStateOf(store.panelUser(config.id)) }
+    var pass by remember(config.id) { mutableStateOf(store.panelPass(config.id)) }
+    var showPass by remember(config.id) { mutableStateOf(false) }
+    var report by remember(config.id) { mutableStateOf<PanelReport?>(null) }
+    var probing by remember(config.id) { mutableStateOf(false) }
+
+    CollapsibleGroup(t("pnl_checks"), expanded, { expanded = !expanded }) {
+        LabeledDropdown(t("pnl_kind"), listOf("3x-ui", "pasarguard"), kind) { kind = it }
+        OutlinedTextField(
+            url, { url = it },
+            label = { Text(t("pnl_url")) },
+            singleLine = true,
+            textStyle = LocalTextStyle.current.copy(fontFamily = monoFont()),
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            user, { user = it },
+            label = { Text(t("pnl_user")) },
+            singleLine = true,
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier.fillMaxWidth()
+        )
+        OutlinedTextField(
+            pass, { pass = it },
+            label = { Text(t("pnl_pass")) },
+            singleLine = true,
+            visualTransformation = if (showPass) VisualTransformation.None
+            else PasswordVisualTransformation(),
+            trailingIcon = {
+                IconButton(onClick = { showPass = !showPass }) {
+                    Icon(
+                        if (showPass) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            },
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        report?.checks?.forEachIndexed { i, check -> ProbeCheckRow(check, i, report) }
+
+        BounceOutlinedButton(
+            onClick = {
+                store.savePanel(config.id, kind, url, user, pass)
+                probing = true
+                scope.launch {
+                    report = runCatching {
+                        PanelProbe.run(
+                            if (kind == "pasarguard") PanelKind.PASARGUARD else PanelKind.XUI,
+                            url, user, pass, config
+                        )
+                    }.getOrNull()
+                    probing = false
+                }
+            },
+            enabled = !probing && url.isNotBlank() && user.isNotBlank(),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(if (probing) t("pnl_running") else t("pnl_run"))
+        }
+    }
+}
+
+@Composable
+private fun ServerChecksGroup(config: ProxyConfig) {
+    val t = stringsFn()
+    val context = LocalContext.current
+    val sshStore = remember { SshStore.get(context) }
+    val hosts by sshStore.hosts.collectAsState()
+    val statuses by SshManager.status.collectAsState()
+    val scope = rememberCoroutineScope()
+
+    var hostId by remember(config.id) { mutableStateOf<String?>(null) }
+    LaunchedEffect(config.id, hosts) {
+        if (hosts.isEmpty()) {
+            hostId = null
+            return@LaunchedEffect
+        }
+        val saved = sshStore.linkedHostId(config.id)?.takeIf { id -> hosts.any { it.id == id } }
+        hostId = saved ?: ServerProbe.bestMatch(sshStore, config)?.id
+    }
+
+    val host = hosts.firstOrNull { it.id == hostId }
+    val connected = host != null && statuses[host.id] is SshStatus.Up
+
+    var report by remember(hostId) { mutableStateOf<ServerReport?>(null) }
+    var probing by remember(hostId) { mutableStateOf(false) }
+
+    var expanded by remember(config.id) { mutableStateOf(false) }
+    if (hosts.isEmpty() || host == null) return
+
+    CollapsibleGroup(t("srv_checks"), expanded, { expanded = !expanded }) {
+        if (hosts.size > 1) {
+            LabeledDropdown(
+                label = t("srv_host"),
+                options = hosts.map { it.title },
+                selected = host.title,
+                onSelect = { title ->
+                    hosts.firstOrNull { it.title == title }?.let {
+                        hostId = it.id
+                        sshStore.link(config.id, it.id)
+                    }
+                }
+            )
+        } else {
+            Text(
+                t("srv_via").format(host.title),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+
+        report?.checks?.forEachIndexed { i, check -> ProbeCheckRow(check, i, report) }
+
+        BounceOutlinedButton(
+            onClick = {
+                probing = true
+                scope.launch {
+                    if (!connected) SshManager.connect(host)
+                    report = if (SshManager.isUp(host.id))
+                        runCatching { ServerProbe.run(host.id, config) }.getOrNull() else null
+                    probing = false
+                }
+            },
+            enabled = !probing,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(if (probing) t("srv_running") else t("srv_run"))
         }
     }
 }
@@ -5823,6 +6422,8 @@ private fun PreferencesScreen(
     var langOpen by remember { mutableStateOf(false) }
     val autoRefreshHours by store.autoRefreshHours.collectAsState()
     var autoRefreshOpen by remember { mutableStateOf(false) }
+    val coreLogLevel by store.coreLogLevel.collectAsState()
+    var coreLogOpen by remember { mutableStateOf(false) }
 
     fun refreshLabel(h: Int): String =
         if (h <= 0) t("auto_refresh_off")
@@ -5922,6 +6523,52 @@ private fun PreferencesScreen(
                     }
                 }
             }
+
+            Text(t("core_log_level"), style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary)
+            Box {
+                OutlinedButton(
+                    onClick = { coreLogOpen = true },
+                    shape = RoundedCornerShape(16.dp),
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        coreLogLevel,
+                        fontFamily = LexendFont,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Icon(Icons.Filled.ExpandMore, contentDescription = null, modifier = Modifier.size(20.dp))
+                }
+                DropdownMenu(
+                    expanded = coreLogOpen,
+                    onDismissRequest = { coreLogOpen = false },
+                    offset = DpOffset(0.dp, 8.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f))
+                ) {
+                    listOf("none", "error", "warning", "info", "debug").forEach { level ->
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    level,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontFamily = LexendFont
+                                )
+                            },
+                            contentPadding = PaddingValues(horizontal = 14.dp),
+                            modifier = Modifier.height(40.dp),
+                            onClick = { store.setCoreLogLevel(level); coreLogOpen = false }
+                        )
+                    }
+                }
+            }
+            Text(
+                t("core_log_level_sub"),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }

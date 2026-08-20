@@ -309,13 +309,14 @@ object ConfigBuilder {
         encryptedDns: Boolean = false,
         torBase: ProxyConfig? = null,
         chainBase: ProxyConfig? = null,
-        onionRouting: Boolean = false
+        onionRouting: Boolean = false,
+        coreLogLevel: String = "warning"
     ): String {
         val onion = onionRouting && config.protocol != "tor"
         val fake = fakeDns || onion
         val dnsOn = fake || encryptedDns
         val root = JSONObject()
-        root.put("log", JSONObject().put("loglevel", "warning"))
+        root.put("log", JSONObject().put("loglevel", coreLogLevel.ifBlank { "warning" }))
 
         if (fake) {
             root.put("fakedns", JSONArray().put(JSONObject()
@@ -580,8 +581,10 @@ object ConfigBuilder {
 
         val tls = JSONObject()
             .put("serverName", config.sni.ifBlank { config.host.ifBlank { config.address } })
-            .put("allowInsecure", config.allowInsecure)
             .put("alpn", csvArray(config.alpn.ifBlank { "h3" }))
+        if (CertPin.isValid(config.pinnedCertSha256)) {
+            tls.put("pinnedPeerCertSha256", config.pinnedCertSha256)
+        }
 
         val hy = JSONObject()
             .put("version", 2)
@@ -729,6 +732,9 @@ object ConfigBuilder {
                         config.host.substringBefore(",").trim().ifEmpty { config.address }
                     })
                     .put("fingerprint", config.fingerprint)
+                if (CertPin.isValid(config.pinnedCertSha256)) {
+                    tls.put("pinnedPeerCertSha256", config.pinnedCertSha256)
+                }
                 if (config.alpn.isNotEmpty()) {
                     val arr = csvArray(config.alpn)
                     if (arr.length() > 0) tls.put("alpn", arr)

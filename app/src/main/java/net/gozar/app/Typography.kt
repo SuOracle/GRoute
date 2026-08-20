@@ -47,11 +47,8 @@ val LexendFont = FontFamily(
     Font(R.font.lexend_black, FontWeight.Black)
 )
 
-val OxaniumFont = FontFamily(
-    Font(R.font.oxanium_regular, FontWeight.Normal),
-    Font(R.font.oxanium_medium, FontWeight.Medium),
-    Font(R.font.oxanium_bold, FontWeight.Bold),
-    Font(R.font.oxanium_bold, FontWeight.Bold)
+val AntaFont = FontFamily(
+    Font(R.font.anta_regular, FontWeight.Normal)
 )
 
 val LexendTypography: Typography = Typography().run {

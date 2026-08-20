@@ -56,20 +56,35 @@ object IkeController {
     }
 
     private var statsJob: kotlinx.coroutines.Job? = null
+    private var watchdog: kotlinx.coroutines.Job? = null
+    private const val CONNECT_TIMEOUT_MS = 45_000L
 
     private fun startStats(context: Context) {
         statsJob?.cancel()
         val app = context.applicationContext
+        val uid = android.os.Process.myUid()
+        val unsupported = android.net.TrafficStats.UNSUPPORTED.toLong()
+
+        fun tx(): Long {
+            val v = android.net.TrafficStats.getUidTxBytes(uid)
+            return if (v == unsupported || v < 0L) 0L else v
+        }
+
+        fun rx(): Long {
+            val v = android.net.TrafficStats.getUidRxBytes(uid)
+            return if (v == unsupported || v < 0L) 0L else v
+        }
+
         statsJob = scope.launch {
-            val baseUp = android.net.TrafficStats.getTotalTxBytes()
-            val baseDown = android.net.TrafficStats.getTotalRxBytes()
+            val baseUp = tx()
+            val baseDown = rx()
             var lastUp = 0L
             var lastDown = 0L
             var lastAt = System.currentTimeMillis()
             while (active) {
                 delay(1000)
-                val up = (android.net.TrafficStats.getTotalTxBytes() - baseUp).coerceAtLeast(0)
-                val down = (android.net.TrafficStats.getTotalRxBytes() - baseDown).coerceAtLeast(0)
+                val up = (tx() - baseUp).coerceAtLeast(0)
+                val down = (rx() - baseDown).coerceAtLeast(0)
                 val now = System.currentTimeMillis()
                 val secs = ((now - lastAt) / 1000.0).coerceAtLeast(0.001)
                 VpnBridge.sendCounters(
@@ -90,13 +105,18 @@ object IkeController {
         _error.value = bound.getErrorState()
         when (bound.getState()) {
             VpnStateService.State.CONNECTED -> {
+                watchdog?.cancel(); watchdog = null
                 VpnState.setConnected()
                 startStats(bound.applicationContext)
             }
-            VpnStateService.State.CONNECTING -> Unit
-            else -> if (active && bound.getErrorState() != VpnStateService.ErrorState.NO_ERROR) {
+            VpnStateService.State.CONNECTING, VpnStateService.State.DISCONNECTING -> Unit
+            else -> if (active) {
                 active = false
-                VpnState.setError(errorKey())
+                watchdog?.cancel(); watchdog = null
+                statsJob?.cancel()
+                if (bound.getErrorState() != VpnStateService.ErrorState.NO_ERROR)
+                    VpnState.setError(errorKey())
+                else VpnState.setDisconnected()
             }
         }
     }
@@ -115,8 +135,6 @@ object IkeController {
 
     private const val TAG = "GRouteIke"
 
-    private val IP_LITERAL = Regex("^[0-9.]+$|^[0-9a-fA-F:]+$")
-
     private fun profileFor(context: Context, config: ProxyConfig): UUID? = runCatching {
         val source = VpnProfileSource(context.applicationContext)
         source.open()
@@ -127,10 +145,8 @@ object IkeController {
         profile.setVpnType(VpnType.IKEV2_EAP)
         profile.setUsername(config.uuid)
         profile.setPassword(config.password)
-        val identity = config.sni.trim()
-        if (identity.isNotEmpty()) profile.setRemoteId(identity)
-        else if (!IP_LITERAL.matches(config.address)) profile.setRemoteId(config.address)
-        else profile.setRemoteId(null)
+        val identity = config.sni.trim().ifEmpty { config.address.trim() }
+        if (identity.isNotEmpty()) profile.setRemoteId(identity) else profile.setRemoteId(null)
         profile.setMTU(if (config.mtu in 576..1500) config.mtu else 1400)
         profile.setFlags(
             VpnProfile.FLAGS_SUPPRESS_CERT_REQS or
@@ -173,6 +189,15 @@ object IkeController {
             return false
         }
         VpnState.setConnecting(config.id)
+        watchdog?.cancel()
+        watchdog = scope.launch {
+            delay(CONNECT_TIMEOUT_MS)
+            if (active && _state.value != VpnStateService.State.CONNECTED) {
+                android.util.Log.w(TAG, "connect timed out after ${CONNECT_TIMEOUT_MS}ms, giving up")
+                disconnect(context)
+                VpnState.setError("ike_err_unreachable")
+            }
+        }
         val intent = Intent(context.applicationContext, CharonVpnService::class.java)
         intent.putExtras(Bundle().apply {
             putString(VpnProfileDataSource.KEY_UUID, uuid.toString())
@@ -193,6 +218,7 @@ object IkeController {
     fun disconnect(context: Context) {
         active = false
         claimedId = ""
+        watchdog?.cancel(); watchdog = null
         statsJob?.cancel()
         runCatching {
             val intent = Intent(context.applicationContext, CharonVpnService::class.java)

@@ -43,6 +43,7 @@ data class ProxyConfig(
     val hyUpMbps: Int = 0,
     val hyDownMbps: Int = 0,
     val allowInsecure: Boolean = false,
+    val pinnedCertSha256: String = "",
     val torCountry: String = "",
     val torThroughVpn: Boolean = false,
     val torBaseId: String = "",
@@ -70,6 +71,7 @@ data class ProxyConfig(
         .put("hyObfs", hyObfs).put("hyObfsPassword", hyObfsPassword)
         .put("hyUpMbps", hyUpMbps).put("hyDownMbps", hyDownMbps)
         .put("allowInsecure", allowInsecure)
+        .put("pinnedCertSha256", pinnedCertSha256)
         .put("torCountry", torCountry).put("torThroughVpn", torThroughVpn)
         .put("torBaseId", torBaseId).put("chainId", chainId)
 
@@ -112,6 +114,7 @@ data class ProxyConfig(
             hyUpMbps = o.optInt("hyUpMbps", 0),
             hyDownMbps = o.optInt("hyDownMbps", 0),
             allowInsecure = o.optBoolean("allowInsecure", false),
+            pinnedCertSha256 = o.optString("pinnedCertSha256", ""),
             torCountry = o.optString("torCountry", ""),
             torThroughVpn = o.optBoolean("torThroughVpn", false),
             torBaseId = o.optString("torBaseId", ""),

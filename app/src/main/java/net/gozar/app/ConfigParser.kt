@@ -241,6 +241,7 @@ object ConfigParser {
             network = network, security = p["security"].orEmpty().ifEmpty { "none" },
             sni = p["sni"] ?: "", publicKey = p["pbk"] ?: "", shortId = p["sid"] ?: "",
             fingerprint = p["fp"].orEmpty().ifEmpty { "chrome" },
+            allowInsecure = (p["allowInsecure"] ?: p["insecure"] ?: "") in setOf("1", "true"),
             path = p["path"].orEmpty().ifEmpty { p["seed"].orEmpty() }, host = p["host"] ?: "",
             serviceName = p["serviceName"].orEmpty().ifEmpty { if (network == "grpc") p["path"].orEmpty() else "" },
             mode = p["mode"] ?: "", alpn = p["alpn"] ?: "",
@@ -259,6 +260,7 @@ object ConfigParser {
             network = network, security = p["security"].orEmpty().ifEmpty { "tls" },
             sni = p["sni"] ?: "", publicKey = p["pbk"] ?: "", shortId = p["sid"] ?: "",
             fingerprint = p["fp"].orEmpty().ifEmpty { "chrome" },
+            allowInsecure = (p["allowInsecure"] ?: p["insecure"] ?: "") in setOf("1", "true"),
             path = p["path"].orEmpty().ifEmpty { p["seed"].orEmpty() }, host = p["host"] ?: "",
             serviceName = p["serviceName"].orEmpty().ifEmpty { if (network == "grpc") p["path"].orEmpty() else "" },
             mode = p["mode"] ?: "", alpn = p["alpn"] ?: "",
@@ -353,23 +355,41 @@ object ConfigParser {
         }
     }
 
+    private val IKE_ID_KEYS = listOf(
+        "remote_id", "remoteid", "sni", "identity", "leftid", "server_id", "serverid"
+    )
+
     private fun parseIkev2(body: String, source: ConfigSource): ProxyConfig? {
         val hash = body.indexOf('#')
         val label = if (hash >= 0) formDecode(body.substring(hash + 1)) else ""
         val core = if (hash >= 0) body.substring(0, hash) else body
-        val at = core.lastIndexOf('@')
+        val q = core.indexOf('?')
+        val params = parseQuery(if (q >= 0) core.substring(q + 1) else "")
+        val main = if (q >= 0) core.substring(0, q) else core
+        val at = main.lastIndexOf('@')
         if (at <= 0) return null
-        val creds = core.substring(0, at)
-        val host = core.substring(at + 1).substringBefore('/').trim()
-        if (host.isEmpty()) return null
+        val creds = main.substring(0, at)
+        val tail = main.substring(at + 1).trim()
+        val slash = tail.indexOf('/')
+        val raw = (if (slash >= 0) tail.substring(0, slash) else tail).trim()
+        if (raw.isEmpty()) return null
+        val pathId = if (slash >= 0) formDecode(tail.substring(slash + 1)).trim().trimEnd('/') else ""
+        val hp = runCatching { splitHostPort(raw) }.getOrNull()
+        val host = hp?.first?.trim().orEmpty().ifEmpty { raw }
+        val port = hp?.second ?: 500
         val colon = creds.indexOf(':')
         if (colon <= 0) return null
+        val identity = pathId.ifEmpty {
+            IKE_ID_KEYS
+                .firstNotNullOfOrNull { k -> params[k]?.let { formDecode(it).trim() }?.ifEmpty { null } }
+                .orEmpty()
+        }
         return ProxyConfig(
             name = label.ifBlank { host },
             protocol = "ikev2",
             address = host,
-            port = 500,
-            sni = host,
+            port = port,
+            sni = identity,
             uuid = formDecode(creds.substring(0, colon)),
             password = formDecode(creds.substring(colon + 1)),
             network = "ikev2",
@@ -546,6 +566,7 @@ object ConfigParser {
             host = host, path = path, security = security,
             sni = p["sni"].orEmpty().ifEmpty { if (security == "tls") host else "" },
             fingerprint = p["fp"].orEmpty().ifEmpty { "chrome" },
+            allowInsecure = (p["allowInsecure"] ?: p["insecure"] ?: "") in setOf("1", "true"),
             alpn = p["alpn"].orEmpty(),
             source = source)
     } catch (e: Exception) { null }

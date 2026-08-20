@@ -42,13 +42,17 @@ object VpnBridge {
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(ctx: Context, intent: Intent) {
                 when (intent.getStringExtra(EX_STATE)) {
-                    S_CONNECTED -> VpnState.setConnected()
-                    S_ERROR -> {
+                    // While IKEv2 owns the tunnel the Xray service is not the authority on
+                    // connection state: IkeController drives VpnState from strongSwan's own
+                    // callbacks. Honouring a late disconnect from the stopped Xray service
+                    // here is what produced the connect/disconnect flicker on IKEv2 connect.
+                    S_CONNECTED -> if (!IkeController.active) VpnState.setConnected()
+                    S_ERROR -> if (!IkeController.active) {
                         VpnState.setError(intent.getStringExtra(EX_ERROR) ?: "Connection failed")
                         _counters.value = VpnCounters()
                     }
                     S_DISCONNECTED -> {
-                        VpnState.setDisconnected()
+                        if (!IkeController.active) VpnState.setDisconnected()
                         _counters.value = VpnCounters()
                         UsageStore.flush()
                     }

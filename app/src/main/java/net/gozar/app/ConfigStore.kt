@@ -79,6 +79,13 @@ class ConfigStore private constructor(context: Context) {
         prefs.edit().putBoolean(KEY_SNIFFING, enabled).apply()
     }
 
+    private val _coreLogLevel = MutableStateFlow(prefs.getString(KEY_CORE_LOG, "warning") ?: "warning")
+    val coreLogLevel: StateFlow<String> = _coreLogLevel.asStateFlow()
+    fun setCoreLogLevel(level: String) {
+        _coreLogLevel.value = level
+        prefs.edit().putString(KEY_CORE_LOG, level).apply()
+    }
+
     private val _killSwitch = MutableStateFlow(prefs.getBoolean(KEY_KILL_SWITCH, false))
     val killSwitch: StateFlow<Boolean> = _killSwitch.asStateFlow()
     fun setKillSwitch(enabled: Boolean) {
@@ -562,6 +569,7 @@ class ConfigStore private constructor(context: Context) {
         private const val KEY_FRAG_INTERVAL = "fragment_interval"
         private const val KEY_SPLIT = "split_routing_enabled"
         private const val KEY_SNIFFING = "sniffing_enabled"
+        private const val KEY_CORE_LOG = "core_log_level"
         private const val KEY_KILL_SWITCH = "kill_switch_enabled"
         private const val KEY_MUX = "mux_enabled"
         private const val KEY_MUX_CONCURRENCY = "mux_concurrency"

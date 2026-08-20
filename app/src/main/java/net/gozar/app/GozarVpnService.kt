@@ -138,7 +138,6 @@ class GozarVpnService : VpnService() {
                 }
                 VpnBridge.sendConnected(applicationContext)
                 startPolling()
-                startAutoSelect()
             } catch (e: Exception) {
                 Log.e(TAG, "Xray core failed to start", e)
                 die(e.message ?: "Engine failed to start")

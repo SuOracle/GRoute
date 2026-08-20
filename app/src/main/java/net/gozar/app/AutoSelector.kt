@@ -53,12 +53,10 @@ class AutoSelector(
         loopJob = null
     }
 
-    private suspend fun runOnce() = coroutineScope {
-        store.awaitReady()
-        val configs = store.configs.value
-        android.util.Log.d(TAG, "runOnce: ${configs.size} configs")
-        if (configs.isEmpty()) return@coroutineScope
+    private fun selectable(all: List<ProxyConfig>): List<ProxyConfig> =
+        all.filter { it.protocol.trim().lowercase() !in SKIP_PROTOCOLS }
 
+    private suspend fun measureAll(configs: List<ProxyConfig>) = coroutineScope {
         val marking = _results.value.toMutableMap()
         configs.forEach { marking[it.id] = PingResult.Testing }
         _results.value = marking.toMap()
@@ -80,6 +78,32 @@ class AutoSelector(
                 }
             }
         }.joinAll()
+    }
+
+    suspend fun pickFastest(timeoutMs: Long = 6_000L): ProxyConfig? {
+        store.awaitReady()
+        val configs = selectable(store.configs.value)
+        android.util.Log.d(TAG, "pickFastest: ${configs.size} candidates")
+        if (configs.isEmpty()) return null
+        if (configs.size == 1) return configs.first()
+
+        withTimeoutOrNull(timeoutMs) { measureAll(configs) }
+
+        val snap = _results.value
+        val best = configs
+            .mapNotNull { c -> (snap[c.id] as? PingResult.Ok)?.let { c to it.ms } }
+            .minByOrNull { it.second }
+        android.util.Log.d(TAG, "pickFastest: ${best?.first?.name} at ${best?.second}ms")
+        return best?.first
+    }
+
+    private suspend fun runOnce() = coroutineScope {
+        store.awaitReady()
+        val configs = selectable(store.configs.value)
+        android.util.Log.d(TAG, "runOnce: ${configs.size} configs")
+        if (configs.isEmpty()) return@coroutineScope
+
+        measureAll(configs)
 
         val snapshot = _results.value
         val best = configs
@@ -156,6 +180,7 @@ class AutoSelector(
     }
 
     private companion object {
+        val SKIP_PROTOCOLS = setOf("tor", "aether")
         const val TAG = "GRouteAuto"
         const val INTERVAL_MS = 60_000L
         const val MAX_CONCURRENCY = 4
