@@ -302,7 +302,7 @@ object Strings {
         "proj_warp_desc" to "Cloudflare WARP over WireGuard. Free and no sign-up, but classic WARP is blocked in Iran \u2014 use Aether instead there.",
         "proj_more_soon" to "More free projects are on the way.",
         "proj_free" to "Free Configs",
-        "proj_free_desc" to "Fresh servers pulled from the @ConfigsHUB Telegram channel. You must be connected to the VPN for GRoute to reach the channel. It measures the real latency of each config every 30 minutes and keeps only those that connect.",
+        "proj_free_desc" to "Fresh servers pulled from the @ConfigsHUB Telegram channel. You must be connected to the VPN for GRoute to reach the channel.",
         "proj_free_testing" to "Testing %d of %d, %d alive",
         "proj_free_working" to "Testing…",
         "proj_free_added" to "%d working configs added",
